@@ -319,3 +319,6 @@ native/fts5_cjk/*.so
 /pm/.lock.json.lock
 
 apps/desktop/.dist-build*
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
