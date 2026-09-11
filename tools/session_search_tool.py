@@ -376,13 +376,11 @@ def _discover(db, query: str, role_filter: Optional[List[str]], limit: int, sort
     # can't starve the user's own sessions out of the top `limit`; stable sort keeps BM25
     # order within each class.
     raw_results = sorted(raw_results, key=lambda r: (r.get("source") or "") in _DEMOTED_SESSION_SOURCES)
-    # See #19434.
-    if not raw_results and not title_result:
-        return _discover_payload(db, query, detail, [], message=(
-            "No matching sessions found. FTS5 ANDs all terms by default — "
-            "broaden with OR (`alpha OR beta`), exact-match with quoted "
-            "phrases, exclude with NOT, or prefix-match with `deploy*`."))
+    # nixbit-patch: session-search-or-fallback-2026-08-30 — upstream's early
+    # empty-return moved below the dedup + OR-fallback pass; see the deferred
+    # `if not seen_sessions` check further down.
     seen_sessions: Dict[str, Dict[str, Any]] = {}
+    saw_hidden_inactive_row = False
     results = [title_result] if title_result else []
     if title_result and (title_lineage := title_result.pop("_lineage_root", None)):
         seen_sessions[title_lineage] = {"_title_only": True}
@@ -412,8 +410,87 @@ def _discover(db, query: str, role_filter: Optional[List[str]], limit: int, sort
                 _session_left_live_context(db, raw_sid) or is_compacted_hit):
             continue
         if current_session_id and raw_sid == current_session_id and not is_compacted_hit:
+            # nixbit-patch: session-search-or-fallback-2026-08-30 — an
+            # inactive non-compacted row (rewind/undo) was deliberately
+            # hidden; remember it so the hidden-inactive probe before the
+            # OR fallback below can refuse to widen an exclusion into a leak.
+            saw_hidden_inactive_row = True
             continue
         seen_sessions.setdefault(resolved_sid, {**r, "_lineage_root": resolved_sid})
+
+    # nixbit-patch: session-search-or-fallback-2026-08-30
+    # AND semantics are strict: every term must appear in ONE message, so
+    # broad keyword lists legitimately match nothing (all-row cases —
+    # e.g. the only AND-match was the current session's own prompt — and
+    # true zero-match cases alike). Before reporting empty, retry once with
+    # the terms OR'd so recall survives over-queries. If the OR retry also
+    # yields nothing, fall through to the same empty payload as upstream.
+    used_or_fallback = False
+    # nixbit-patch: session-search-or-fallback-2026-08-30 — hidden-inactive
+    # guard: if rows exist only as inactive (rewind/undo) rows — including
+    # ones the primary pass deliberately skipped above — the AND result
+    # wasn't "too narrow", it was an exclusion. Widening with OR could leak
+    # hidden content's session into results; report the upstream empty shape
+    # instead of falling back.
+    if not seen_sessions:
+        hidden_inactive = False
+        try:
+            hidden_inactive = bool(db.search_messages(
+                query=query,
+                role_filter=role_filter or ["user", "assistant"],
+                exclude_sources=list(_HIDDEN_SESSION_SOURCES),
+                limit=1,
+                offset=0,
+                sort=sort,
+                include_inactive=True,
+            ))
+        except Exception as e:
+            logging.warning("session_search inactive-probe failed: %s", e)
+        if hidden_inactive or saw_hidden_inactive_row:
+            return _discover_payload(db, query, detail, [], message=(
+                "No matching sessions found. FTS5 ANDs all terms by default — "
+                "broaden with OR (`alpha OR beta`), exact-match with quoted "
+                "phrases, exclude with NOT, or prefix-match with `deploy*`."))
+        # nixbit-patch: session-search-or-fallback-2026-08-30
+        or_terms = [t for t in query.replace('"', " ").split() if t]
+        or_query = " OR ".join(f'"{t}"' for t in or_terms) if or_terms else ""
+        if or_query and or_query != query:
+            try:
+                or_raw = sorted(db.search_messages(
+                    query=or_query,
+                    role_filter=role_filter or ["user", "assistant"],
+                    exclude_sources=list(_HIDDEN_SESSION_SOURCES),
+                    limit=_DISCOVER_SCAN_LIMIT,
+                    offset=0,
+                    sort=sort,
+                    fields=_DISCOVER_SEARCH_FIELDS,
+                ), key=lambda r: (r.get("source") or "") in _DEMOTED_SESSION_SOURCES)
+                for r in or_raw:
+                    if len(seen_sessions) >= limit:
+                        break
+                    raw_sid = r["session_id"]
+                    resolved_sid = _resolve_lineage(db, raw_sid)
+                    # Same live-context exemption logic as the primary pass:
+                    # compression-ended / new-reset predecessors / in-place
+                    # compacted rows stay discoverable; live same-lineage
+                    # hits don't.
+                    is_compacted_hit = _is_compacted_message(db, r.get("id"))
+                    if current_lineage_root and resolved_sid == current_lineage_root and not (
+                            _session_left_live_context(db, raw_sid) or is_compacted_hit):
+                        continue
+                    if current_session_id and raw_sid == current_session_id and not is_compacted_hit:
+                        continue
+                    if resolved_sid not in seen_sessions:
+                        seen_sessions[resolved_sid] = {**r, "_lineage_root": resolved_sid}
+                        used_or_fallback = True
+            except Exception as e:
+                logging.warning("session_search OR fallback failed: %s", e)
+
+    if not seen_sessions:
+        return _discover_payload(db, query, detail, [], message=(
+            "No matching sessions found. FTS5 ANDs all terms by default — "
+            "broaden with OR (`alpha OR beta`), exact-match with quoted "
+            "phrases, exclude with NOT, or prefix-match with `deploy*`."))
     for lineage_root, match_info in seen_sessions.items():
         if match_info.get("_title_only"):
             continue
@@ -423,7 +500,8 @@ def _discover(db, query: str, role_filter: Optional[List[str]], limit: int, sort
             results.append(entry)
     for entry in results:
         entry["link"] = _session_link(entry["session_id"], link_profile)
-    return _discover_payload(db, query, detail, results, sessions_searched=len(seen_sessions), link_hint=(
+    return _discover_payload(db, query, detail, results, sessions_searched=len(seen_sessions),
+                             or_fallback=used_or_fallback, link_hint=(
         "When referring the user to a session, write its `link` value "
         "verbatim inline mid-sentence (it renders as a titled link) — never "
         "as markdown, in backticks, on its own line, or next to the "
