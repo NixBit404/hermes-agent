@@ -189,27 +189,43 @@ _PROTECTED_INSTRUCTION_BASENAMES = frozenset({
     "agents.md", "claude.md", "soul.md", ".cursorrules"})
 
 
-def _protected_instruction_config() -> tuple[bool, list[str]]:
-    """Return ``(enabled, extra_patterns)`` from ``security.protected_instruction_files`` /
-    ``security.protected_instruction_extra_patterns`` (fnmatch on basename). Config read
-    failures keep the gate ON — fail-safe for a security boundary."""
+def _protected_instruction_config() -> tuple[bool, list[str], list[str]]:
+    """Return ``(enabled, extra_patterns, exempt_basenames)`` from
+    ``security.protected_instruction_files`` / ``security.protected_instruction_extra_patterns``
+    (fnmatch on basename) / ``security.protected_instruction_exemptions`` (exact basename
+    matches, case-insensitive). Config read failures keep the gate ON — fail-safe for a
+    security boundary."""
     try:
         from hermes_cli.config import load_config, cfg_get
         cfg = load_config()
         enabled = cfg_get(cfg, "security", "protected_instruction_files", default=True)
         extra = cfg_get(cfg, "security", "protected_instruction_extra_patterns", default=[])
+        exempt = cfg_get(cfg, "security", "protected_instruction_exemptions", default=[])
     except Exception:
-        return True, []
+        return True, [], []
     if not isinstance(enabled, bool):
         enabled = True
     if not isinstance(extra, list):
         extra = []
-    return enabled, [str(p) for p in extra if p]
+    if isinstance(exempt, str):
+        # Accept a single basename or a JSON list stored as a string.
+        try:
+            import json as _json
+            _parsed = _json.loads(exempt)
+            exempt = _parsed if isinstance(_parsed, list) else [exempt]
+        except Exception:
+            exempt = [exempt]
+    if not isinstance(exempt, list):
+        exempt = []
+    return (enabled, [str(p) for p in extra if p],
+            [str(p).lower() for p in exempt if p])
 
 
 def _protected_instruction_reason(filepath: str, task_id: str = "default",
                                   *, enabled: bool | None = None,
-                                  extra_patterns: list[str] | None = None) -> str | None:
+                                  extra_patterns: list[str] | None = None,
+                                  exempt_basenames: list[str] | None = None
+                                  ) -> str | None:
     """Return a short label when ``filepath`` targets a protected instruction file, else ``None``.
     Matches BOTH the normalized input and its realpath so no symlink direction escapes.
 
@@ -218,7 +234,12 @@ def _protected_instruction_reason(filepath: str, task_id: str = "default",
     is neutralized by normpath/realpath before the basename compare.
     """
     if enabled is None or extra_patterns is None:
-        enabled, extra_patterns = _protected_instruction_config()
+        # Defensive unpacking: some callers/tests may monkeypatch this with
+        # the older 2-tuple shape. 3rd element (exemptions) is optional.
+        _cfg = _protected_instruction_config()
+        enabled = _cfg[0]
+        extra_patterns = _cfg[1]
+        exempt_basenames = _cfg[2] if len(_cfg) > 2 else []
     if not enabled:
         return None
 
@@ -240,6 +261,12 @@ def _protected_instruction_reason(filepath: str, task_id: str = "default",
     for candidate in (normalized, resolved):
         base = os.path.basename(candidate)
         base_lower = base.lower()
+        # nixbit-patch: agents-md-exemption-2026-09-02 — per-basename config
+        # exemptions (security.protected_instruction_exemptions); the agent's
+        # own project-scaffold AGENTS.md convention is exempt on this machine
+        # while CLAUDE.md/SOUL.md/.cursorrules stay gated.
+        if exempt_basenames and base_lower in exempt_basenames:
+            continue
         if base_lower in _PROTECTED_INSTRUCTION_BASENAMES or any(
                 fnmatch.fnmatch(base_lower, pattern.lower()) for pattern in extra_patterns):
             return base
@@ -334,11 +361,19 @@ def _request_protected_instruction_approval(reasons: list[str], task_id: str = "
 def _check_protected_instruction_write(paths: list[str], task_id: str = "default") -> str | None:
     """Gate a write/patch touching protected instruction files. ONE protected file gates
     the ENTIRE multi-file patch (one prompt, all-or-nothing)."""
-    enabled, extra = _protected_instruction_config()
+    _cfg = _protected_instruction_config()
+    enabled = _cfg[0]
+    extra = _cfg[1]
+    exempt = _cfg[2] if len(_cfg) > 2 else []
     if not enabled:
         return None
-    reasons = [r for r in (_protected_instruction_reason(p, task_id, enabled=enabled, extra_patterns=extra)
-                           for p in paths) if r]
+    reasons: list[str] = []
+    for p in paths:
+        reason = _protected_instruction_reason(
+            p, task_id, enabled=enabled, extra_patterns=extra,
+            exempt_basenames=exempt)
+        if reason:
+            reasons.append(reason)
     if not reasons:
         return None
     return _request_protected_instruction_approval(reasons, task_id)
