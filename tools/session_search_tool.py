@@ -668,13 +668,18 @@ SESSION_SEARCH_SCHEMA = {
     "parameters": {
         "type": "object",
         "properties": {
+            # nixbit-patch: session-search-and-semantics-2026-08-30
             "query": {
                 "type": "string",
                 "description": (
-                    "Search query (discovery shape). Keywords, phrases, or boolean "
-                    "expressions to find in past sessions. Omit to browse recent "
-                    "sessions. Ignored when session_id + around_message_id are set "
-                    "(scroll shape)."
+                    "Search query (discovery shape). Matching is FTS5 AND "
+                    "semantics: EVERY term must appear in the SAME message, so "
+                    "use 2-3 distinctive terms (or a quoted phrase) rather "
+                    "than a broad keyword list — 'qdrant payload filters' "
+                    "beats 'vault search index notes project stuff'. If "
+                    "nothing matches, drop terms, don't add synonyms. Omit "
+                    "to browse recent sessions. Ignored when session_id + "
+                    "around_message_id are set (scroll shape)."
                 ),
             },
             "limit": {
