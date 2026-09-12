@@ -613,3 +613,48 @@ def test_skill_file_lock_is_reentrant_in_thread_and_exclusive_across_threads(tmp
         assert not other_done.wait(timeout=0.2), "second thread acquired a held lock"
     t.join(timeout=2)
     assert entered.is_set() and other_done.is_set()
+
+# --- skill_search call log (.search_log.jsonl) — M4 eval seed data ---
+
+def test_log_skill_search_appends_jsonl(skills_home):
+    import tools.skill_usage as mod
+
+    mod.log_skill_search("find files with spotlight", [{"name": "live-macbook-search", "score": 8.3}], 9.31)
+    mod.log_skill_search("nothing matches", [], 1.5)
+
+    lines = (skills_home / "skills" / ".search_log.jsonl").read_text().splitlines()
+    assert len(lines) == 2
+    first = json.loads(lines[0])
+    assert first["query"] == "find files with spotlight"
+    assert first["results"] == [{"name": "live-macbook-search", "score": 8.3}]
+    assert first["latency_ms"] == 9.31
+    assert first["ts"]
+    assert json.loads(lines[1])["results"] == []
+
+
+def test_log_skill_search_caps_and_sanitizes(skills_home):
+    import tools.skill_usage as mod
+
+    mod.log_skill_search("q" * 500, [{"name": "x", "score": 1e9, "extra": "dropped"}], 2.0)
+    entry = json.loads((skills_home / "skills" / ".search_log.jsonl").read_text())
+    assert len(entry["query"]) == 200
+    assert entry["results"] == [{"name": "x", "score": 1e9}]
+    assert "error" not in entry
+
+
+def test_log_skill_search_never_raises(skills_home, monkeypatch):
+    import tools.skill_usage as mod
+
+    def _boom():
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(mod, "_skills_dir", _boom)
+    mod.log_skill_search("query", [], 1.0)   # must swallow
+
+
+def test_log_skill_search_records_error_field(skills_home):
+    import tools.skill_usage as mod
+
+    mod.log_skill_search("query", [], 1.0, error="index build failed: boom")
+    entry = json.loads((skills_home / "skills" / ".search_log.jsonl").read_text())
+    assert entry["error"] == "index build failed: boom"

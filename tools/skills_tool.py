@@ -801,6 +801,13 @@ def _skill_search_suggestions(bad_name: str, limit: int = 3) -> list:
         return []
 
 
+def _log_skill_search(query: str, hits: List[Dict[str, Any]], started: float,
+                      error: Optional[str] = None) -> None:
+    """Best-effort call telemetry to skills/.search_log.jsonl (see skill_usage.log_skill_search)."""
+    from tools.skill_usage import log_skill_search
+    log_skill_search(query, hits, (time.perf_counter() - started) * 1000.0, error=error)
+
+
 def skill_search(query: str, limit: int = SKILL_SEARCH_DEFAULT_LIMIT) -> str:
     """BM25F search over installed skills (full descriptions, triggers, tags, body stubs)."""
     try:
@@ -808,8 +815,10 @@ def skill_search(query: str, limit: int = SKILL_SEARCH_DEFAULT_LIMIT) -> str:
         if not q:
             return tool_error("skill_search requires a non-empty 'query' describing the task.", success=False)
         limit = max(1, min(int(limit or SKILL_SEARCH_DEFAULT_LIMIT), SKILL_SEARCH_MAX_LIMIT))
+        started = time.perf_counter()
         index = _get_skill_search_index()
         if index is None:
+            _log_skill_search(q, [], started, error="no skills available to search")
             return tool_error("No skills available to search. Use skills_list once skills are installed.", success=False)
         hits = index.search(q, limit=limit)
         # Usage-telemetry prior (pinned / recency / use_count) re-ranks the BM25F hits
@@ -823,11 +832,13 @@ def skill_search(query: str, limit: int = SKILL_SEARCH_DEFAULT_LIMIT) -> str:
         # Exact-name hits carry score=inf from the ranker — sanitize to a finite sentinel
         # before serialization (json.dumps would emit non-RFC "Infinity").
         hits = [{**h, "score": (1e9 if h["score"] == float("inf") else h["score"])} for h in hits]
+        _log_skill_search(q, hits, started)
         if not hits:
             return json.dumps({"success": True, "query": q, "results": [],
                                "note": "No skill matched; browse categories with skills_list or the names-only catalog."})
         return json.dumps({"success": True, "query": q, "results": hits})
     except Exception as e:
+        _log_skill_search(str(query), [], time.perf_counter(), error=str(e))
         return tool_error(str(e), success=False)
 
 
