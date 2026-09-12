@@ -769,13 +769,45 @@ def _normalize_skill_description(frontmatter: Dict[str, Any]) -> str:
 
 def extract_skill_description(frontmatter: Dict[str, Any]) -> str:
     """Extract a system-prompt-length description from parsed frontmatter."""
-    desc = _normalize_skill_description(frontmatter)
-    return desc[:SKILL_PROMPT_DESC_LIMIT - 3] + "..." if len(desc) > SKILL_PROMPT_DESC_LIMIT else desc
+    return truncate_prompt_description(_normalize_skill_description(frontmatter))
 
 
 def is_skill_description_truncated_for_prompt(frontmatter: Dict[str, Any]) -> bool:
     """True when the description will be truncated in the system prompt skill index."""
     return len(_normalize_skill_description(frontmatter)) > SKILL_PROMPT_DESC_LIMIT
+
+
+def truncate_prompt_description(desc: str, limit: int = SKILL_PROMPT_DESC_LIMIT) -> str:
+    """Render-length cut for index lines; 57 chars + '...' at the default limit."""
+    return desc[: limit - 3] + "..." if len(desc) > limit else desc
+
+
+def _tag_list(value) -> list:
+    """Frontmatter list-or-comma-string -> clean str list."""
+    if isinstance(value, str):
+        items = value.split(",")
+    else:
+        items = list(value or [])
+    return [str(i).strip() for i in items if str(i).strip()]
+
+
+def extract_skill_search_fields(skill_file: Path, frontmatter: Dict[str, Any]) -> Dict[str, Any]:
+    """Searchable text beyond name+description: author-declared triggers/tags and a body
+    stub. Fail-open — a skill with unreadable body still gets name/description search."""
+    empty = {"triggers": [], "tags": [], "related_skills": [], "body_headings": [], "body_head": ""}
+    try:
+        text = skill_file.read_text("utf-8", errors="replace")
+        body = text.split("---", 2)[2] if text.startswith("---") else text
+        headings = [ln.strip().lstrip("#").strip() for ln in body.splitlines() if ln.lstrip().startswith("#")][:40]
+        return {
+            "triggers": _tag_list(frontmatter.get("triggers")),
+            "tags": _tag_list(frontmatter.get("tags")),
+            "related_skills": _tag_list(frontmatter.get("related_skills")),
+            "body_headings": [h for h in headings if h],
+            "body_head": " ".join(body.split())[:500],
+        }
+    except Exception:
+        return empty
 
 
 def iter_skill_index_files(skills_dir: Path, filename: str):
