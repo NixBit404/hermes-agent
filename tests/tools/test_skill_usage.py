@@ -653,3 +653,47 @@ def test_is_locked_ignores_malformed_records_but_never_relaxes_a_truthy_flag(ski
     assert mod.is_locked("b") is True
     assert mod.is_locked("c") is False
     assert mod.is_locked("missing") is False
+# --- skill_search call log (.search_log.jsonl) — M4 eval seed data ---
+
+def test_log_skill_search_appends_jsonl(skills_home):
+    import tools.skill_usage as mod
+
+    mod.log_skill_search("find files with spotlight", [{"name": "live-macbook-search", "score": 8.3}], 9.31)
+    mod.log_skill_search("nothing matches", [], 1.5)
+
+    lines = (skills_home / "skills" / ".search_log.jsonl").read_text().splitlines()
+    assert len(lines) == 2
+    first = json.loads(lines[0])
+    assert first["query"] == "find files with spotlight"
+    assert first["results"] == [{"name": "live-macbook-search", "score": 8.3}]
+    assert first["latency_ms"] == 9.31
+    assert first["ts"]
+    assert json.loads(lines[1])["results"] == []
+
+
+def test_log_skill_search_caps_and_sanitizes(skills_home):
+    import tools.skill_usage as mod
+
+    mod.log_skill_search("q" * 500, [{"name": "x", "score": 1e9, "extra": "dropped"}], 2.0)
+    entry = json.loads((skills_home / "skills" / ".search_log.jsonl").read_text())
+    assert len(entry["query"]) == 200
+    assert entry["results"] == [{"name": "x", "score": 1e9}]
+    assert "error" not in entry
+
+
+def test_log_skill_search_never_raises(skills_home, monkeypatch):
+    import tools.skill_usage as mod
+
+    def _boom():
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setattr(mod, "_skills_dir", _boom)
+    mod.log_skill_search("query", [], 1.0)   # must swallow
+
+
+def test_log_skill_search_records_error_field(skills_home):
+    import tools.skill_usage as mod
+
+    mod.log_skill_search("query", [], 1.0, error="index build failed: boom")
+    entry = json.loads((skills_home / "skills" / ".search_log.jsonl").read_text())
+    assert entry["error"] == "index build failed: boom"
