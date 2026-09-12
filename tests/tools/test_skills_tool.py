@@ -1122,3 +1122,62 @@ class TestTrustWarningSymlinkAware:
             self._log("sym", root / "sym" / "SKILL.md", [root], root)
 
         assert "outside the trusted" in caplog.text, caplog.text
+
+class TestSkillSearchTool:
+    def _setup(self, tmp_path, monkeypatch):
+        # Align BOTH resolution paths: _get_skill_search_index validates the snapshot
+        # against SKILLS_DIR, but build_skills_system_prompt() (no-arg warm-up) resolves
+        # skills dirs from HERMES_HOME. Tests must point them at the same tree.
+        from agent.prompt_builder import clear_skills_system_prompt_cache
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+        d = tmp_path / "skills"; d.mkdir(exist_ok=True)
+        for name, desc in [("live-macbook-search", "Searches the live MacBook desktop with Spotlight and mdfind."),
+                           ("pdf-forms", "Fill and flatten PDF forms with pypdf.")]:
+            (d / name).mkdir(parents=True, exist_ok=True)
+            (d / name / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {desc}\n---\nbody\n")
+        return d
+
+    def test_search_ranks_and_returns_json(self, tmp_path, monkeypatch):
+        import json
+        d = self._setup(tmp_path, monkeypatch)
+        with patch("tools.skills_tool.SKILLS_DIR", d):
+            from tools.skills_tool import skill_search, _reset_skill_search_cache
+            _reset_skill_search_cache()
+            result = json.loads(skill_search("find files with spotlight on the mac", limit=3))
+            assert result["success"] is True
+            assert result["results"][0]["name"] == "live-macbook-search"
+
+    def test_empty_query_returns_hint_not_exception(self, tmp_path, monkeypatch):
+        import json
+        d = self._setup(tmp_path, monkeypatch)
+        with patch("tools.skills_tool.SKILLS_DIR", d):
+            from tools.skills_tool import skill_search, _reset_skill_search_cache
+            _reset_skill_search_cache()
+            result = json.loads(skill_search("   "))
+            assert result["success"] is False and "query" in result["error"]
+
+    def test_missing_dirs_degrades_to_error_json(self, tmp_path, monkeypatch):
+        import json
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        from agent.prompt_builder import clear_skills_system_prompt_cache
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+        empty = tmp_path / "empty"; empty.mkdir()
+        (empty / ".keep").write_text("")
+        with patch("tools.skills_tool.SKILLS_DIR", empty):
+            from tools.skills_tool import skill_search, _reset_skill_search_cache
+            _reset_skill_search_cache()
+            result = json.loads(skill_search("anything"))
+            assert result["success"] is False     # no exception, graceful JSON
+
+    def test_exact_name_hit_is_strict_json(self, tmp_path, monkeypatch):
+        raw = None
+        d = self._setup(tmp_path, monkeypatch)
+        with patch("tools.skills_tool.SKILLS_DIR", d):
+            from tools.skills_tool import skill_search, _reset_skill_search_cache
+            _reset_skill_search_cache()
+            raw = skill_search("pdf-forms")       # exact name → ranker returns score=inf
+        assert "Infinity" not in raw and "NaN" not in raw
+        import json
+        result = json.loads(raw, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(c)))
+        assert result["results"][0]["name"] == "pdf-forms" and result["results"][0]["score"] == 1e9

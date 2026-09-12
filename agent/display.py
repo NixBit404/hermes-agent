@@ -511,7 +511,7 @@ _TOOL_VERB_TOOLS: frozenset[str] = frozenset({
     "web_search", "web_extract", "browser_navigate", "browser_click", "browser_type",
     "read_file", "write_file", "patch", "search_files", "terminal", "execute_code",
     "image_generate", "video_generate", "text_to_speech", "vision_analyze", "session_search",
-    "skill_view", "skills_list", "skill_manage", "delegate_task", "cronjob_manage", "clarify",
+    "skill_view", "skills_list", "skill_manage", "skill_search", "delegate_task", "cronjob_manage", "clarify",
     "memory", "todo_list",
 })
 
@@ -521,7 +521,7 @@ def _tool_verb(tool_name: str) -> str | None:
 
 
 # Verbs that read better without the argument preview appended.
-_TOOL_VERBS_NO_PREVIEW: frozenset[str] = frozenset({"skills_list", "session_search"})
+_TOOL_VERBS_NO_PREVIEW: frozenset[str] = frozenset({"skills_list", "session_search", "skill_search"})
 # Verbs joined to the preview with " for " (search-style phrasing).
 _TOOL_VERBS_FOR_CONNECTOR: frozenset[str] = frozenset({"web_search", "search_files"})
 
@@ -1168,6 +1168,7 @@ _CUTE_LINES = {
     "session_search": lambda a, r: _cute_row("🔍", "recall", f"\"{_cute_trunc(a.get('query', ''))}\""),
     "memory": _cute_memory,
     "skills_list": lambda a, r: _cute_row("📚", "skills", t("display.cute.skills_list", category=a.get("category") or t("display.cute.skills_all"))),
+    "skill_search": lambda a, r: _cute_row("🔍", "skills", t("display.cute.skill_search", query=a.get("query", ""))),
     "skill_view": _cute_skill_view,
     "image_generate": lambda a, r: _cute_row("🎨", "create", _cute_trunc(a.get("prompt", ""))),
     "text_to_speech": lambda a, r: _cute_row("🔊", "speak", _cute_trunc(a.get("text", ""))),
