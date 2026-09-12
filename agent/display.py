@@ -509,11 +509,12 @@ _TOOL_VERBS: dict[str, str] = {
     "text_to_speech": "Generating speech", "vision_analyze": "Looking at the image",
     "session_search": "Searching past sessions",
     "skill_view": "Reading skill", "skills_list": "Listing skills", "skill_manage": "Updating skill",
+    "skill_search": "Searching skills",
     "delegate_task": "Delegating", "cronjob_manage": "Scheduling", "clarify": "Asking",
     "memory": "Updating memory", "todo_list": "Updating tasks",
 }
 # Verbs that read better without the argument preview appended.
-_TOOL_VERBS_NO_PREVIEW: frozenset[str] = frozenset({"skills_list", "session_search"})
+_TOOL_VERBS_NO_PREVIEW: frozenset[str] = frozenset({"skills_list", "session_search", "skill_search"})
 # Verbs joined to the preview with " for " (search-style phrasing).
 _TOOL_VERBS_FOR_CONNECTOR: frozenset[str] = frozenset({"web_search", "search_files"})
 
@@ -1135,6 +1136,7 @@ _CUTE_LINES = {
     "session_search": lambda a, r: f"┊ 🔍 recall    \"{_cute_trunc(a.get('query', ''))}\"",
     "memory": _cute_memory,
     "skills_list": lambda a, r: f"┊ 📚 skills    list {a.get('category', 'all')}",
+    "skill_search": lambda a, r: f"┊ 🔍 skills    search {a.get('query', '')}",
     "skill_view": _cute_skill_view,
     "image_generate": lambda a, r: f"┊ 🎨 create    {_cute_trunc(a.get('prompt', ''))}",
     "text_to_speech": lambda a, r: f"┊ 🔊 speak     {_cute_trunc(a.get('text', ''))}",
