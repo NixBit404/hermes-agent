@@ -96,9 +96,14 @@ class SkillSearchIndex:
             return []
         exact = self._by_name.get(query.strip().lower())
         n = len(self.docs)
+        # DF per UNIQUE query token, computed once — the per-doc loop must not
+        # recompute it (O(docs²·tokens): ~500-780ms on the real 428-skill library;
+        # SPEC p95 target <25ms). Same summation as before, so scores are identical.
+        df_map: Dict[str, int] = {q: sum(1 for d in self.docs if self._wtf(d, q) > 0)
+                                  for q in set(q_tokens)}
         scored = []
         for doc in self.docs:
-            s = float("inf") if doc is exact else self._score(q_tokens, doc, n)
+            s = float("inf") if doc is exact else self._score(q_tokens, doc, n, df_map)
             if s > 0:
                 scored.append((s, doc))
         if not scored:  # substring fallback (tool-catalog precedent)
@@ -109,13 +114,15 @@ class SkillSearchIndex:
                  "description": " ".join((d.description or "").split())[:RESULT_DESC_LIMIT],
                  "score": round(s, 3)} for s, d in scored[:limit]]
 
-    def _score(self, q_tokens: List[str], doc: SkillDoc, n: int) -> float:
+    def _score(self, q_tokens: List[str], doc: SkillDoc, n: int, df_map: Dict[str, int]) -> float:
+        """BM25F over the doc's weighted fields; ``df_map`` carries per-token document
+        frequencies precomputed by ``search`` (one pass, not one per doc·token)."""
         total = 0.0
         for q in q_tokens:
             tf = self._wtf(doc, q)
             if tf <= 0:
                 continue
-            df = sum(1 for d in self.docs if self._wtf(d, q) > 0)
+            df = df_map[q]
             idf = math.log(1 + (n - df + 0.5) / (df + 0.5))
             total += idf * tf * (K1 + 1) / (tf + K1 * (1 - B + B * doc.dlw / max(self.avg_dlw, 1.0)))
         return total
