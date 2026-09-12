@@ -217,13 +217,14 @@ class TestParseSkillFile:
         assert desc == "A useful test skill"
 
 
-    def test_long_description_truncated(self, tmp_path):
+    def test_long_description_returned_in_full(self, tmp_path):
+        # Snapshot v3: _parse_skill_file returns the FULL description; the
+        # 60-char cut happens at render time (_render_skills_index).
         skill_file = tmp_path / "SKILL.md"
         long_desc = "A" * 100
         skill_file.write_text(f"---\ndescription: {long_desc}\n---\n")
         _, _, desc = _parse_skill_file(skill_file)
-        assert len(desc) <= 60
-        assert desc.endswith("...")
+        assert desc == long_desc
 
 
     def test_logs_parse_failures_and_returns_defaults(self, tmp_path, monkeypatch, caplog):
@@ -1002,3 +1003,42 @@ class TestContextFileReadTimeout:
 
         with pytest.raises(FileNotFoundError):
             _read_text_with_timeout(tmp_path / "missing.md", timeout=1.0)
+
+
+class TestSnapshotV3SearchFields:
+    LONG_DESC = "Searches the live MacBook with Spotlight and mdfind, routing follow-ups to the right tool. " * 3
+
+    def _mk_skill(self, tmp_path, name, desc, triggers=""):
+        d = tmp_path / "skills" / name
+        d.mkdir(parents=True, exist_ok=True)
+        tr = f"triggers:\n{triggers}" if triggers else ""
+        (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {desc}\n{tr}\n---\n\n## Setup\nBody text here.\n", encoding="utf-8")
+
+    def test_snapshot_stores_full_description_and_search_fields(self, tmp_path, monkeypatch):
+        import json
+        from agent.prompt_builder import build_skills_system_prompt, clear_skills_system_prompt_cache, _skills_prompt_snapshot_path
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+        skills = tmp_path / "skills"; skills.mkdir()
+        self._mk_skill(tmp_path, "demo-long", self.LONG_DESC, triggers="  - search the web\n")
+        result = build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
+        snap = json.loads(_skills_prompt_snapshot_path().read_text())
+        assert snap["version"] == 3
+        entry = next(e for e in snap["skills"] if e["frontmatter_name"] == "demo-long")
+        assert entry["description"] == self.LONG_DESC.strip()          # full, uncut
+        assert entry["search_fields"]["triggers"] == ["search the web"]
+        assert "Setup" in entry["search_fields"]["body_headings"]
+        # Rendered prompt stays byte-compatible with the old 60-char behavior:
+        assert "demo-long: " + self.LONG_DESC.strip()[:57] + "..." in result
+
+    def test_render_is_byte_identical_to_legacy_cut(self, tmp_path, monkeypatch):
+        from agent.prompt_builder import build_skills_system_prompt, clear_skills_system_prompt_cache
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+        skills = tmp_path / "skills"; skills.mkdir()
+        self._mk_skill(tmp_path, "aa", "short desc")
+        self._mk_skill(tmp_path, "bb", self.LONG_DESC)
+        result = build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
+        assert "    - aa: short desc" in result
+        assert "    - bb: " + self.LONG_DESC.strip()[:57] + "..." in result
+        assert self.LONG_DESC.strip()[60:100] not in result            # nothing beyond the cut
