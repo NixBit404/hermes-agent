@@ -1042,3 +1042,17 @@ class TestSnapshotV3SearchFields:
         assert "    - aa: short desc" in result
         assert "    - bb: " + self.LONG_DESC.strip()[:57] + "..." in result
         assert self.LONG_DESC.strip()[60:100] not in result            # nothing beyond the cut
+
+
+class TestLoadValidSkillsSnapshot:
+    def test_returns_none_then_snapshot_after_build(self, tmp_path, monkeypatch):
+        from agent.prompt_builder import (build_skills_system_prompt, clear_skills_system_prompt_cache,
+                                          load_valid_skills_snapshot, _skills_prompt_snapshot_path)
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+        skills = tmp_path / "skills"; skills.mkdir()
+        (skills / "s1").mkdir(); (skills / "s1" / "SKILL.md").write_text("---\nname: s1\ndescription: d\n---\nbody\n")
+        assert load_valid_skills_snapshot(skills) is None            # no snapshot yet
+        build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
+        snap = load_valid_skills_snapshot(skills)
+        assert snap is not None and snap["version"] == 3 and snap["skills"][0]["frontmatter_name"] == "s1"

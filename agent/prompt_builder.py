@@ -1190,6 +1190,14 @@ def _requires_apps_list(frontmatter: dict) -> list[str]:
     return [str(a).strip() for a in items if str(a).strip()]
 
 
+def load_valid_skills_snapshot(skills_dir: Path) -> "Optional[dict]":
+    """Validated skills snapshot for consumers outside the render path (skill_search)."""
+    try:
+        return _load_skills_snapshot(skills_dir)
+    except Exception:
+        return None
+
+
 def _build_snapshot_entry(skill_file: Path, skills_dir: Path, frontmatter: dict, description: str) -> dict:
     """Serialisable metadata dict for one skill."""
     parts = skill_file.relative_to(skills_dir).parts
