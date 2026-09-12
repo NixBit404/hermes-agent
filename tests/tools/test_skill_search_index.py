@@ -42,6 +42,15 @@ class TestSkillSearchIndex:
         hits = self._index().search("pdf-forms", limit=2)
         assert hits[0]["name"] == "pdf-forms"
 
+    def test_multi_token_query_ranking_and_scores_pinned(self):
+        """Correctness pin for the DF-map refactor of _score (df computed once per
+        unique query token in search() instead of per doc·token): a known multi-token
+        query must keep returning EXACTLY these ranked names and scores (captured from
+        the pre-refactor implementation; the refactor must be bit-identical)."""
+        hits = self._index().search("find files on the mac with spotlight", limit=3)
+        assert [(h["name"], h["score"]) for h in hits] == [
+            ("live-macbook-search", 11.367), ("live-pi-52-search", 2.275), ("pdf-forms", 1.182)]
+
     def test_substring_fallback_when_no_token_hits(self):
         hits = self._index().search("pi52", limit=2)   # "pi52" stems to itself; lives in name/tags
         assert any(h["name"] == "live-pi-52-search" for h in hits)
