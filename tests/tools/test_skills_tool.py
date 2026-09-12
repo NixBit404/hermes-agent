@@ -1182,6 +1182,33 @@ class TestSkillSearchTool:
         result = json.loads(raw, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(c)))
         assert result["results"][0]["name"] == "pdf-forms" and result["results"][0]["score"] == 1e9
 
+    def test_external_dir_skills_are_searchable(self, tmp_path, monkeypatch):
+        """The snapshot only manifests the PRIMARY skills dir; external dirs are
+        scanned live by _get_skill_search_index, so skill_search must find skills
+        the prompt lists via _collect_extra_skills (previously an authoritative
+        'No skill matched')."""
+        import json
+        from agent import skill_utils
+        from agent.prompt_builder import clear_skills_system_prompt_cache
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))   # align snapshot warm-up with SKILLS_DIR
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+        d = tmp_path / "skills"; d.mkdir()
+        (d / "pdf-forms").mkdir()
+        (d / "pdf-forms" / "SKILL.md").write_text(
+            "---\nname: pdf-forms\ndescription: Fill and flatten PDF forms with pypdf.\n---\nbody\n")
+        ext = tmp_path / "external" / "laser" / "ext-laser-cnc"; ext.mkdir(parents=True)
+        (ext / "SKILL.md").write_text(
+            "---\nname: ext-laser-cnc\ndescription: Route laser cutting jobs to the external CNC controller.\n---\nbody\n")
+        monkeypatch.setattr(skill_utils, "get_all_skills_dirs", lambda: [d, tmp_path / "external"], raising=True)
+        monkeypatch.setattr(skill_utils, "get_project_skills_dirs", lambda: [], raising=True)
+        with patch("tools.skills_tool.SKILLS_DIR", d):
+            from tools.skills_tool import skill_search, _reset_skill_search_cache
+            _reset_skill_search_cache()
+            result = json.loads(skill_search("laser cutting cnc", limit=3))
+        assert result["success"] is True
+        assert result["results"][0]["name"] == "ext-laser-cnc"        # external skill found
+        assert result["results"][0]["category"] == "laser"
+
 
 class TestSkillSearchPrior:
     def test_pinned_outranks_higher_bm25(self, tmp_path, monkeypatch):
