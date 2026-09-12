@@ -20,6 +20,7 @@ from agent.tool_result_classification import (
 
 IDEMPOTENT_TOOL_NAMES = frozenset({
     "read_file", "search_files", "web_search", "web_extract", "session_search", "skill_view", "skills_list",
+    "skill_search",
     "browser_snapshot", "browser_console", "browser_get_images",
 })
 
