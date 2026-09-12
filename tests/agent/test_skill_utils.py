@@ -336,3 +336,41 @@ class TestBOMToleranceSiblingSites:
         assert fm is not None
         assert fm.get("name") == "bp"
 
+
+class TestSearchFieldExtraction:
+    def _write_skill(self, tmp_path, fm="name: demo\ndescription: A demo skill\ntriggers:\n  - search the web\ntags: [web, search]\nrelated_skills: [other-skill]\n", body="# Demo\n\n## Setup\nDo things.\n"):
+        p = tmp_path / "demo" / "SKILL.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(f"---\n{fm}---\n{body}", encoding="utf-8")
+        return p
+
+    def test_truncate_prompt_description_cuts_with_ellipsis(self):
+        from agent.skill_utils import truncate_prompt_description
+        assert truncate_prompt_description("x" * 100) == "x" * 57 + "..."
+        assert truncate_prompt_description("short") == "short"
+        assert truncate_prompt_description("y" * 80, limit=240) == "y" * 80
+
+    def test_extract_search_fields_reads_frontmatter_and_body(self, tmp_path):
+        from agent.skill_utils import extract_skill_search_fields, parse_frontmatter
+        p = self._write_skill(tmp_path)
+        fm, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+        fields = extract_skill_search_fields(p, fm)
+        assert fields["triggers"] == ["search the web"]
+        assert fields["tags"] == ["web", "search"]
+        assert fields["related_skills"] == ["other-skill"]
+        assert "Setup" in fields["body_headings"]
+        assert "Do things." in fields["body_head"]
+        assert len(fields["body_head"]) <= 500
+
+    def test_extract_search_fields_failopen_on_garbage(self, tmp_path):
+        from agent.skill_utils import extract_skill_search_fields
+        fields = extract_skill_search_fields(tmp_path / "nope.md", {})
+        assert fields == {"triggers": [], "tags": [], "related_skills": [], "body_headings": [], "body_head": ""}
+
+    def test_extract_search_fields_tolerates_string_tags(self, tmp_path):
+        from agent.skill_utils import extract_skill_search_fields, parse_frontmatter
+        p = self._write_skill(tmp_path, fm="name: demo2\ndescription: d\ntags: web, search\n")
+        fm, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+        fields = extract_skill_search_fields(p, fm)
+        assert fields["tags"] == ["web", "search"]
+
