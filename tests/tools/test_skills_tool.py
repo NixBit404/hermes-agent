@@ -1148,6 +1148,21 @@ class TestSkillSearchTool:
             assert result["success"] is True
             assert result["results"][0]["name"] == "live-macbook-search"
 
+    def test_search_appends_call_log(self, tmp_path, monkeypatch):
+        import json
+        d = self._setup(tmp_path, monkeypatch)
+        with patch("tools.skills_tool.SKILLS_DIR", d):
+            from tools.skills_tool import skill_search, _reset_skill_search_cache
+            _reset_skill_search_cache()
+            json.loads(skill_search("find files with spotlight on the mac", limit=3))
+            log_file = d / ".search_log.jsonl"
+            assert log_file.exists()
+            entry = json.loads(log_file.read_text())
+            assert entry["query"] == "find files with spotlight on the mac"
+            assert entry["results"][0]["name"] == "live-macbook-search"
+            assert entry["latency_ms"] >= 0
+            assert entry["ts"]
+
     def test_empty_query_returns_hint_not_exception(self, tmp_path, monkeypatch):
         import json
         d = self._setup(tmp_path, monkeypatch)
