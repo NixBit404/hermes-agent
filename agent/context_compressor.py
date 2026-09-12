@@ -1987,6 +1987,7 @@ _TOOL_RESULT_SUMMARIZERS = {
     "skill_view": _sum_skill_view,
     "skills_list": _sum_skills_list,
     "skill_manage": _sum_skill_manage,
+    "skill_search": _sum_template("[skill_search] query='{query}' ({content_len:,} chars)", query="?"),
     "vision_analyze": lambda name, args, content, content_len, line_count: (
         f"[vision_analyze] '{_str_arg(args, 'question')[:50]}' ({content_len:,} chars)"
         + _result_failure_suffix(content)
