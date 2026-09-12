@@ -863,6 +863,7 @@ SKILL_PROMPT_DESC_LIMIT = 60
 _SKILL_PROMPT_DESC_LIMIT_MAX = 1024
 _LAST_WHITESPACE_RE = re.compile(r"\s\S*$")
 _CLIP_TRAIL_RE = re.compile(r"[\s.,;:\-\u2013\u2014(/]+$")
+SKILL_PROMPT_FULL_DESC_LIMIT = 240   # two-tier catalog: full-tier description cut
 
 
 def get_skill_desc_limit() -> int:
