@@ -24,9 +24,9 @@ from agent.model_metadata import CHARS_PER_TOKEN
 from agent.runtime_cwd import resolve_agent_cwd
 from agent.skill_utils import (
     EXCLUDED_SKILL_DIRS, ORG_ACTIVE_MARKER, ORG_MIRROR_DIR_NAME, ORG_PROVENANCE_FILE, SKILL_SUPPORT_DIRS,
-    EXCLUDED_SKILL_DIRS, ORG_ACTIVE_MARKER, ORG_MIRROR_DIR_NAME, ORG_PROVENANCE_FILE, SKILL_SUPPORT_DIRS,
-    _normalize_skill_description, extract_skill_conditions, extract_skill_search_fields, get_all_skills_dirs,
-    get_disabled_skill_names, iter_skill_index_files, parse_frontmatter, read_active_org_id, skill_matches_apps,
+    SKILL_PROMPT_DESC_LIMIT, SKILL_PROMPT_FULL_DESC_LIMIT, _normalize_skill_description, extract_skill_conditions,
+    extract_skill_search_fields, get_all_skills_dirs, get_disabled_skill_names, get_skills_search_settings,
+    iter_skill_index_files, parse_frontmatter, read_active_org_id, skill_matches_apps,
     skill_matches_environment, skill_matches_platform, skill_matches_platform_list, truncate_prompt_description,
 )
 from tools.threat_patterns import scan_for_threats as _scan_for_threats
@@ -1438,11 +1438,26 @@ def _select_full_entries(entries: list, usage: dict, budget_chars: int) -> "froz
     return frozenset(keep)
 
 
+def _tier_cut(desc: str, limit: int) -> str:
+    """Tier cut that never eats a baked-in [prefix]; prefixes are render metadata."""
+    if desc.startswith("["):
+        prefix, _, rest = desc.partition("] ")
+        return prefix + "] " + truncate_prompt_description(rest, limit) if rest else truncate_prompt_description(desc, limit)
+    return truncate_prompt_description(desc, limit)
+
+
 def _render_skills_index(
     skills_by_category: dict[str, list[tuple[str, str]]], category_descriptions: dict[str, str],
     compact_categories: "frozenset[str] | None", available_tools: "set[str] | None",
+    full_entries: "frozenset[str] | None" = None, full_desc_limit: int = SKILL_PROMPT_DESC_LIMIT,
 ) -> str:
-    """Render the ## Skills block; "" when there is nothing to list."""
+    """Render the ## Skills block; "" when there is nothing to list.
+
+    Two-tier mode (``full_entries`` a frozenset): names in ``full_entries`` keep a
+    description cut at ``full_desc_limit`` (240 from the catalog builder); every other
+    name still renders — collapsed onto a per-category ``[names only]`` sub-line.
+    ``full_entries=None`` is the legacy single-tier render (60-char cut).
+    """
     if not skills_by_category:
         return ""
     # Demoted categories collapse to one names-only line. NEVER drop entries — agent-created skills are the
@@ -1463,11 +1478,17 @@ def _render_skills_index(
             continue
         cat_desc = category_descriptions.get(category, "")
         index_lines.append(f"  {category}: {cat_desc}" if cat_desc else f"  {category}:")
+        full, rest = [], []
+        for name, desc in sorted(entries, key=lambda x: x[0]):
+            (full if (full_entries is None or name in full_entries) else rest).append((name, desc))
         seen = set()
-        for name, desc in sorted(entries, key=lambda x: x[0]):  # stable: first entry per name wins
+        for name, desc in full:
             if name not in seen:
                 seen.add(name)
-                index_lines.append(f"    - {name}: {truncate_prompt_description(desc)}" if desc else f"    - {name}")
+                limit = SKILL_PROMPT_DESC_LIMIT if full_entries is None else full_desc_limit
+                index_lines.append(f"    - {name}: {_tier_cut(desc, limit)}" if desc else f"    - {name}")
+        if full_entries is not None and rest:
+            index_lines.append("    [names only]: " + ", ".join(sorted({n for n, _ in rest})))
     from agent.oneshot_footprint import ONESHOT_SKILLS_LOAD_GUIDANCE, is_single_query_session
     if is_single_query_session():
         return (
@@ -1494,6 +1515,10 @@ def _render_skills_index(
         + "\n".join(index_lines) + "\n"
         "</available_skills>\n\n"
         "Only proceed without loading a skill if genuinely none are relevant to the task."
+        + (""
+           if not (full_entries is not None and available_tools and "skill_search" in available_tools)
+           else "\nSkills shown names-only carry no description here — before concluding no skill "
+                "applies, call skill_search('<what you are trying to do>').")
         + hidden_note
     )
 
@@ -1511,6 +1536,10 @@ def _build_skills_system_prompt_inner(
     # The resolved platform is part of the key: per-platform disabled-skill lists need distinct cache entries.
     _platform_hint = _current_session_platform_hint()
     disabled = get_disabled_skill_names(_platform_hint or None)
+    # Tier inputs are part of the key too: a changed search budget or usage summary
+    # (pin/recency/use_count) must not be served from a stale LRU entry.
+    search_cfg = get_skills_search_settings()
+    usage = _load_usage_summary()
     project_dirs = project_dirs or []
     cache_key = (
         str(skills_dir), tuple(str(d) for d in external_dirs), tuple(str(d) for d in project_dirs),
@@ -1518,6 +1547,7 @@ def _build_skills_system_prompt_inner(
         tuple(sorted(str(ts) for ts in (available_toolsets or set()))),
         _platform_hint, tuple(sorted(disabled)), tuple(sorted(compact_categories or ())),
         _oneshot_prompt_variant(),
+        search_cfg["budget_tokens"], _usage_digest(usage),
     )
     snapshot = _load_skills_snapshot(skills_dir)
     app_gated = snapshot is not None and any(
@@ -1580,7 +1610,23 @@ def _build_skills_system_prompt_inner(
         for cat, cat_desc in _read_category_descriptions(ext_dir, "Could not read external skill description %s: %s").items():
             category_descriptions.setdefault(cat, cat_desc)
 
-    result = _render_skills_index(skills_by_category, category_descriptions, compact_categories, available_tools)
+    # Two-tier catalog input: deduplicated candidate names (first occurrence wins) —
+    # org/personal frontmatter-name collisions render as ONE line, so counting each
+    # duplicate would silently spend full-tier budget on names that never render.
+    visible_names: list[str] = []
+    seen_names: set[str] = set()
+    for e, _ in candidates:
+        name = e.get("frontmatter_name") or e.get("skill_name") or ""
+        if name and name not in seen_names:
+            seen_names.add(name)
+            visible_names.append(name)
+    full_entries = _select_full_entries(
+        [{"frontmatter_name": n} for n in visible_names], usage,
+        budget_chars=search_cfg["budget_tokens"] * 4)
+
+    result = _render_skills_index(
+        skills_by_category, category_descriptions, compact_categories, available_tools,
+        full_entries=full_entries, full_desc_limit=SKILL_PROMPT_FULL_DESC_LIMIT)
     with _SKILLS_PROMPT_CACHE_LOCK:
         _SKILLS_PROMPT_CACHE[cache_key] = result
         _SKILLS_PROMPT_CACHE.move_to_end(cache_key)
