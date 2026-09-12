@@ -1183,6 +1183,29 @@ class TestSkillSearchTool:
         assert result["results"][0]["name"] == "pdf-forms" and result["results"][0]["score"] == 1e9
 
 
+class TestSkillSearchPrior:
+    def test_pinned_outranks_higher_bm25(self, tmp_path, monkeypatch):
+        import json
+        from agent.prompt_builder import clear_skills_system_prompt_cache
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))   # align with SKILLS_DIR below
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+        sk = tmp_path / "skills"; sk.mkdir()
+        (sk / "mac-search").mkdir()
+        (sk / "mac-search" / "SKILL.md").write_text("---\nname: mac-search\ndescription: MacBook Spotlight mdfind search.\n---\nbody\n")
+        (sk / "other").mkdir()
+        (sk / "other" / "SKILL.md").write_text("---\nname: other\ndescription: search search search.\n---\nbody\n")
+        (sk / ".usage.json").write_text(json.dumps({"other": {"use_count": 0, "pinned": True, "last_used_at": None}}))
+        monkeypatched = patch("tools.skills_tool.SKILLS_DIR", sk)
+        with monkeypatched:
+            from tools.skills_tool import skill_search, _reset_skill_search_cache
+            import tools.skill_usage as su
+            _reset_skill_search_cache()
+            with patch.object(su, "load_usage", return_value={"other": {"use_count": 0, "pinned": True, "last_used_at": None}}):
+                result = json.loads(skill_search("macbook spotlight search", limit=2))
+        assert result["results"][0]["name"] == "other"            # +2.0 pinned prior flips the order
+        assert result["results"][0]["badges"] == ["pinned"]
+
+
 class TestSkillViewDidYouMean:
     def test_typo_gets_ranked_suggestion(self, tmp_path, monkeypatch):
         import json
