@@ -29,6 +29,7 @@ from tools.skills_tool_plugin import (  # noqa: F401
 from tools.skills_tool_dedup import (  # noqa: F401
     _check_skill_view_dedup, _record_skill_view, reset_skill_view_dedup)
 from tools.skill_provenance import is_background_review
+from tools.skill_search_index import difflib_suggest
 
 logger = logging.getLogger(__name__)
 
@@ -550,6 +551,7 @@ def _locate_skill(name: str, local_category_name: Optional[str], project_dirs: l
     if not skill_md or not skill_md.exists():
         available = [s["name"] for s in _sort_skills(_find_all_skills())[:20]]
         return _fail(f"Skill '{name}' not found.", available_skills=available,
+                     did_you_mean=_skill_search_suggestions(name),
                      hint="Use skills_list to see all available skills"), None, None
     return None, skill_dir, skill_md
 
@@ -719,6 +721,24 @@ def _get_skill_search_index():
     except Exception as e:
         logger.warning("skill_search index build failed: %s", e)
         return None
+
+
+def _skill_search_suggestions(bad_name: str, limit: int = 3) -> list:
+    """Typo recovery: difflib over names first (BM25 can't match misspelled tokens),
+    ranker as semantic fallback. Best-effort — [] on any failure."""
+    try:
+        index = _get_skill_search_index()
+        if index is None:
+            return []
+        names = [d.name for d in index.docs]
+        close = [n for n in difflib_suggest(names, bad_name, limit=limit)]
+        if not close:
+            return [{"name": h["name"], "description": h["description"]}
+                    for h in index.search(bad_name, limit=limit)]
+        by_name = {d.name: " ".join((d.description or "").split())[:200] for d in index.docs}
+        return [{"name": n, "description": by_name.get(n, "")} for n in close]
+    except Exception:
+        return []
 
 
 def skill_search(query: str, limit: int = SKILL_SEARCH_DEFAULT_LIMIT) -> str:
