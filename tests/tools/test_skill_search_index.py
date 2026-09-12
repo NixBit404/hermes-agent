@@ -78,6 +78,13 @@ class TestSkillSearchIndex:
         names = [e["frontmatter_name"] for e in CANARIES]
         assert "live-macbook-search" in difflib_suggest(names, "live-macbook-serach", limit=2)
 
+    def test_difflib_suggest_returns_original_case(self):
+        """Suggestions must keep the corpus' casing: the skill_view retry is
+        case-sensitive and the description lookup is keyed by the exact name, so a
+        lowercased match would fail both."""
+        from tools.skill_search_index import difflib_suggest
+        assert difflib_suggest(["Mac-Search", "pdf-forms"], "mac-serach") == ["Mac-Search"]
+
 
 class TestUsagePrior:
     def test_prior_monotonic_and_pinned_and_excluded(self):

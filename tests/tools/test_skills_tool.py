@@ -1222,3 +1222,24 @@ class TestSkillViewDidYouMean:
             result = json.loads(skill_view("live-macbook-serach"))
             assert result.get("success") is False
             assert [s["name"] for s in result.get("did_you_mean", [])][:1] == ["live-macbook-search"]
+
+    def test_mixed_case_suggestion_keeps_case_and_description(self, tmp_path, monkeypatch):
+        """difflib_suggest used to return lowercased names: the by_name description
+        lookup missed (blank description) and the case-sensitive skill_view retry
+        failed. The did_you_mean entry must carry the exact original-case name plus
+        a non-empty description."""
+        import json
+        from agent.prompt_builder import clear_skills_system_prompt_cache
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))   # align with SKILLS_DIR below
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+        d = tmp_path / "skills"; d.mkdir()
+        (d / "Mac-Search").mkdir()
+        (d / "Mac-Search" / "SKILL.md").write_text(
+            "---\nname: Mac-Search\ndescription: Searches the live MacBook desktop with Spotlight.\n---\nbody\n")
+        with patch("tools.skills_tool.SKILLS_DIR", d):
+            from tools.skills_tool import skill_view, _reset_skill_search_cache
+            _reset_skill_search_cache()
+            result = json.loads(skill_view("Mac-Serach"))
+        assert result.get("success") is False
+        assert result["did_you_mean"] == [{"name": "Mac-Search",
+                                           "description": "Searches the live MacBook desktop with Spotlight."}]
