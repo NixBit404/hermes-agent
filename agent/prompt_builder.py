@@ -1699,16 +1699,19 @@ def _build_skills_system_prompt_inner(
         except Exception as e:
             logger.debug("Could not write skills prompt snapshot: %s", e)
 
-    # Two-tier catalog input: deduplicated candidate names (first occurrence wins) —
-    # frontmatter-name collisions render as ONE line, so counting each duplicate would
+    # Two-tier catalog input: the FINAL rendered name set — deduplicated
+    # first-occurrence names from skills_by_category (all tiers: local,
+    # project, external), so full-tier selection is dir-agnostic per SPEC §4.1
+    # (pinned ∪ top-use ∪ recent) and external/project skills compete for slots
+    # by usage. Collision duplicates render as ONE line, so counting each would
     # silently spend full-tier budget on names that never render.
     visible_names: list[str] = []
     seen_names: set[str] = set()
-    for e, _ in candidates:
-        name = e.get("frontmatter_name") or e.get("skill_name") or ""
-        if name and name not in seen_names:
-            seen_names.add(name)
-            visible_names.append(name)
+    for category in sorted(skills_by_category):
+        for name, _ in skills_by_category[category]:
+            if name and name not in seen_names:
+                seen_names.add(name)
+                visible_names.append(name)
     full_entries = _select_full_entries(
         [{"frontmatter_name": n} for n in visible_names], usage,
         budget_chars=search_cfg["budget_tokens"] * 4)
