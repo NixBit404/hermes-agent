@@ -857,6 +857,7 @@ def resolve_skill_config_values(config_vars: list[dict[str, Any]]) -> dict[str, 
 SKILL_PROMPT_DESC_LIMIT = 60
 _LAST_WHITESPACE_RE = re.compile(r"\s\S*$")
 _CLIP_TRAIL_RE = re.compile(r"[\s.,;:\-\u2013\u2014(/]+$")
+SKILL_PROMPT_FULL_DESC_LIMIT = 240   # two-tier catalog: full-tier description cut
 
 
 def _normalize_skill_description(frontmatter: dict[str, Any]) -> str:
