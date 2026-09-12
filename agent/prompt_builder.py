@@ -1390,6 +1390,54 @@ def _label_visible_entries(visible_entries: list[dict], skills_by_category: dict
         skills_by_category.setdefault(category, []).append((fm, desc))
 
 
+_FULL_ENTRY_EST_CHARS = 260      # name + 240-char description + line overhead
+_FULL_TIER_MAX = 30
+
+
+def _recent_use(iso, days: int = 14) -> bool:
+    if not iso:
+        return False
+    try:
+        from datetime import datetime, timedelta, timezone
+        dt = datetime.fromisoformat(str(iso))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt >= datetime.now(timezone.utc) - timedelta(days=days)
+    except ValueError:
+        return False
+
+
+def _select_full_entries(entries: list, usage: dict, budget_chars: int) -> "frozenset[str]":
+    """Names that keep a description in the two-tier catalog; deterministic (ties by name).
+
+    Qualify: pinned ∪ recent (14-day recency) first, then filler by descending use_count
+    (ties alphabetical) up to ``_FULL_TIER_MAX`` — so zero-telemetry still yields an
+    alphabetical full tier. Budget ladder: while the estimated render exceeds
+    ``budget_chars``, demote the weakest non-pinned qualifier — reverse qualification
+    order, i.e. the filler tail (lowest use_count, ties alphabetically-last) — so recent
+    entries outlast stale filler and an alphabetical tier keeps its head. Pinned survive.
+    """
+    ranked = []
+    for e in entries:
+        name = e.get("frontmatter_name") or e.get("skill_name") or ""
+        if not name:
+            continue
+        rec = usage.get(name) or {}
+        ranked.append((bool(rec.get("pinned")), int(rec.get("use_count") or 0),
+                       _recent_use(rec.get("last_used_at")), name))
+    pinned = [r for r in ranked if r[0]]
+    recent = [r for r in ranked if not r[0] and r[2]]
+    filler = sorted((r for r in ranked if not (r[0] or r[2])), key=lambda r: (-r[1], r[3]))
+    qualifiers = (pinned + recent + filler)[: max(_FULL_TIER_MAX, len(pinned))]
+    keep = [r[3] for r in qualifiers]
+    demotable = [r for r in reversed(qualifiers) if not r[0]]  # weakest first: filler tail
+    for r in demotable:
+        if len(keep) * _FULL_ENTRY_EST_CHARS <= budget_chars:
+            break
+        keep.remove(r[3])
+    return frozenset(keep)
+
+
 def _render_skills_index(
     skills_by_category: dict[str, list[tuple[str, str]]], category_descriptions: dict[str, str],
     compact_categories: "frozenset[str] | None", available_tools: "set[str] | None",

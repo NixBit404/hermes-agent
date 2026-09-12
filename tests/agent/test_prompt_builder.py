@@ -1079,3 +1079,38 @@ class TestUsageSummary:
             '{"x": {"use_count": "many"}, "z": {"use_count": [1]}, '
             '"y": {"use_count": 2, "pinned": false, "last_used_at": null}}')
         assert _load_usage_summary() == {"y": {"use_count": 2, "pinned": False, "last_used_at": None}}
+
+
+class TestSelectFullEntries:
+    def _entries(self, *names):
+        return [{"frontmatter_name": n, "skill_name": n, "category": "general", "description": "d"} for n in names]
+
+    def test_pinned_and_usage_select_then_budget_demotes(self):
+        from agent.prompt_builder import _select_full_entries
+        names = [f"s{i:02d}" for i in range(40)]
+        entries = self._entries(*names)
+        usage = {n: {"use_count": 0, "pinned": False, "last_used_at": None} for n in names}
+        usage["s05"] = {"use_count": 99, "pinned": True, "last_used_at": None}
+        for i in range(35):  # top-30 by use
+            usage[f"s{i:02d}"]["use_count"] = 50 - i
+        full = _select_full_entries(entries, usage, budget_chars=10 * 260)   # room for ~10
+        assert len(full) == 10
+        assert "s05" in full                                              # pinned never demoted first
+        assert "s39" not in full                                          # zero-use demoted
+        tiny = _select_full_entries(entries, usage, budget_chars=1 * 260)
+        assert tiny == frozenset({"s05"})                                 # pinned survives the ladder
+
+    def test_recent_use_beats_stale_under_tight_budget(self):
+        from agent.prompt_builder import _select_full_entries
+        entries = self._entries("old", "recent")
+        usage = {"old": {"use_count": 0, "pinned": False, "last_used_at": "2020-01-01T00:00:00"},
+                 "recent": {"use_count": 0, "pinned": False, "last_used_at": "2099-01-01T00:00:00"}}
+        assert _select_full_entries(entries, usage, budget_chars=10_000) == frozenset({"old", "recent"})
+        assert _select_full_entries(entries, usage, budget_chars=1 * 260) == frozenset({"recent"})
+
+    def test_zero_usage_fills_tier_alphabetically(self):
+        from agent.prompt_builder import _select_full_entries
+        entries = self._entries("bb", "aa", "cc")
+        full = _select_full_entries(entries, usage={}, budget_chars=10 * 260)
+        assert full == frozenset({"aa", "bb", "cc"})                     # filler: alphabetical at zero use
+        assert _select_full_entries(entries, usage={}, budget_chars=1 * 260) == frozenset({"aa"})
