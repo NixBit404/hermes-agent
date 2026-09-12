@@ -310,6 +310,21 @@ def get_disabled_skill_names(platform: str | None = None) -> Set[str]:
     return disabled - ESSENTIAL_SKILLS
 
 
+DEFAULT_SKILLS_SEARCH_BUDGET_TOKENS = 4000
+
+
+def get_skills_search_settings() -> Dict[str, Any]:
+    """skills.search config: budget_tokens (clamped), telemetry_excluded (set of names)."""
+    raw = (_skills_cfg() or {}).get("search") or {}
+    try:
+        budget = int(raw.get("budget_tokens") or DEFAULT_SKILLS_SEARCH_BUDGET_TOKENS)
+    except (TypeError, ValueError):
+        budget = DEFAULT_SKILLS_SEARCH_BUDGET_TOKENS
+    budget = max(500, min(budget, 20000))
+    excluded = frozenset(str(x).strip() for x in (raw.get("telemetry_excluded") or []) if str(x).strip())
+    return {"budget_tokens": budget, "telemetry_excluded": excluded}
+
+
 def parse_config_string_list(value) -> List[str]:
     """Normalize a config value that may hold a JSON-array string into a list.
     ``hermes config set`` stores lists as quoted JSON/Python-literal strings;
