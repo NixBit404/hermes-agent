@@ -8,6 +8,7 @@ import hashlib
 import json
 import logging
 import os
+import threading
 import time
 from contextlib import suppress
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -681,6 +682,67 @@ def skill_view(
         return tool_error(str(e), success=False)
 
 
+_SKILL_SEARCH_CACHE_LOCK = threading.Lock()
+_SKILL_SEARCH_INDEX_CACHE: dict = {}   # {(skills_dir, manifest_key): SkillSearchIndex}
+SKILL_SEARCH_DEFAULT_LIMIT = 5
+SKILL_SEARCH_MAX_LIMIT = 10
+
+
+def _reset_skill_search_cache() -> None:
+    with _SKILL_SEARCH_CACHE_LOCK:
+        _SKILL_SEARCH_INDEX_CACHE.clear()
+
+
+def _get_skill_search_index():
+    """Lazily build the BM25F corpus from the validated snapshot; warm it once if stale.
+    Returns None when no skills can be indexed — callers degrade, never raise."""
+    try:
+        from agent.prompt_builder import build_skills_system_prompt, load_valid_skills_snapshot
+        from tools.skill_search_index import SkillSearchIndex, build_skill_docs
+        skills_dir = Path(SKILLS_DIR)
+        snap = load_valid_skills_snapshot(skills_dir)
+        if snap is None:
+            build_skills_system_prompt()          # renders + persists a fresh snapshot v3
+            snap = load_valid_skills_snapshot(skills_dir)
+        if not snap or not snap.get("skills"):
+            return None
+        key = (str(skills_dir), json.dumps(snap.get("manifest", {}), sort_keys=True))
+        with _SKILL_SEARCH_CACHE_LOCK:
+            cached = _SKILL_SEARCH_INDEX_CACHE.get(key)
+            if cached is not None:
+                return cached
+        index = SkillSearchIndex(build_skill_docs(snap["skills"]))
+        with _SKILL_SEARCH_CACHE_LOCK:
+            _SKILL_SEARCH_INDEX_CACHE.clear()     # single-slot: skills dir changes are rare
+            _SKILL_SEARCH_INDEX_CACHE[key] = index
+        return index
+    except Exception as e:
+        logger.warning("skill_search index build failed: %s", e)
+        return None
+
+
+def skill_search(query: str, limit: int = SKILL_SEARCH_DEFAULT_LIMIT) -> str:
+    """BM25F search over installed skills (full descriptions, triggers, tags, body stubs)."""
+    try:
+        q = (query or "").strip()
+        if not q:
+            return tool_error("skill_search requires a non-empty 'query' describing the task.", success=False)
+        limit = max(1, min(int(limit or SKILL_SEARCH_DEFAULT_LIMIT), SKILL_SEARCH_MAX_LIMIT))
+        index = _get_skill_search_index()
+        if index is None:
+            return tool_error("No skills available to search. Use skills_list once skills are installed.", success=False)
+        hits = index.search(q, limit=limit)
+        # Exact-name hits carry score=inf from the ranker — sanitize to a finite sentinel
+        # before serialization (json.dumps would emit non-RFC "Infinity").
+        hits = [{**h, "score": (1e9 if h["score"] == float("inf") else h["score"])} for h in hits]
+        if not hits:
+            return json.dumps({"success": True, "query": q, "results": [],
+                               "note": "No skill matched; browse categories with skills_list or the names-only catalog."})
+        return json.dumps({"success": True, "query": q, "results": hits})
+    except Exception as e:
+        return tool_error(str(e), success=False)
+
+
 SKILLS_LIST_SCHEMA = {
     "name": "skills_list",
     "description": "List available skills (name + description). Use skill_view(name) to load full content.",
@@ -751,6 +813,23 @@ def _skill_view_with_bump(args, **kw):
 registry.register(
     name="skill_view", toolset="skills", schema=SKILL_VIEW_SCHEMA, handler=_skill_view_with_bump,
     check_fn=check_skills_requirements, emoji="📚")
+
+
+SKILL_SEARCH_SCHEMA = {
+    "name": "skill_search",
+    "description": ("Full-text search over installed skills by task, tool, or keyword — ranks by BM25F over "
+                    "names, full descriptions, triggers, and tags. Use before concluding no skill applies; "
+                    "then load with skill_view(name)."),
+    "parameters": {"type": "object", "properties": {
+        "query": {"type": "string", "description": "What you are trying to do, or a skill name/keyword."},
+        "limit": {"type": "integer", "description": "Max results (default 5, max 10)."},
+    }, "required": ["query"]},
+}
+
+registry.register(
+    name="skill_search", toolset="skills", schema=SKILL_SEARCH_SCHEMA,
+    handler=lambda args, **kw: skill_search(query=args.get("query", ""), limit=args.get("limit") or 5),
+    check_fn=check_skills_requirements, emoji="🔍")
 
 
 # ---- BEGIN PLUGIN-COMPAT (revert-scheduled; see COMPAT_MANIFEST.md) ----
