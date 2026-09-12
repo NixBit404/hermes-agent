@@ -695,6 +695,62 @@ def _reset_skill_search_cache() -> None:
         _SKILL_SEARCH_INDEX_CACHE.clear()
 
 
+def _extra_skill_docs(skills_dir: Path, existing_names: set) -> list:
+    """Docs for external/project skills — the snapshot is a manifest of the PRIMARY
+    skills dir only, so without this scan ``skill_search`` would answer an authoritative
+    "No skill matched" for skills the prompt lists via _collect_extra_skills.
+    Best-effort: any failure yields [] — the caller keeps its snapshot-only corpus.
+
+    Cache limitation: the corpus cache key is the primary dir's manifest, so external/
+    project skill EDITS surface only after _reset_skill_search_cache() or a restart —
+    accepted because external skills change rarely. Shadowing is approximated: names
+    already in the corpus are skipped, so a project skill shadowing a local name keeps
+    the local doc (names not in the corpus still get indexed, project dirs first)."""
+    try:
+        from agent.prompt_builder import _build_snapshot_entry, _parse_skill_file
+        from agent.skill_utils import (
+            get_all_skills_dirs, get_project_skills_dirs, iter_project_skill_files, iter_skill_index_files,
+        )
+        from tools.skill_search_index import build_skill_docs
+
+        def scan(root: Path, skill_files) -> list:
+            docs, seen = [], set()
+            for skill_file in skill_files:
+                try:
+                    is_compatible, frontmatter, desc = _parse_skill_file(skill_file)
+                    if not is_compatible:
+                        continue
+                    entry = _build_snapshot_entry(skill_file, root, frontmatter, desc)
+                    name = str(entry.get("frontmatter_name") or entry.get("skill_name") or "").strip()
+                    if not name or name in existing_names or name in seen:
+                        continue
+                    seen.add(name)
+                    docs.extend(build_skill_docs([entry]))
+                except Exception:
+                    continue
+            return docs
+
+        docs: list = []
+        for proj_dir in get_project_skills_dirs():  # quarantine chokepoint included
+            if proj_dir.exists():
+                docs.extend(scan(proj_dir, iter_project_skill_files(proj_dir)))
+        try:
+            primary = skills_dir.resolve()
+        except OSError:
+            primary = skills_dir
+        for ext_dir in get_all_skills_dirs()[1:]:  # index 0 is the (already-snapshotted) local dir
+            try:
+                is_primary = ext_dir.resolve() == primary
+            except OSError:
+                is_primary = False
+            if ext_dir.exists() and not is_primary:
+                docs.extend(scan(ext_dir, iter_skill_index_files(ext_dir, "SKILL.md")))
+        return docs
+    except Exception:
+        logger.debug("skill_search external/project skill scan failed", exc_info=True)
+        return []
+
+
 def _get_skill_search_index():
     """Lazily build the BM25F corpus from the validated snapshot; warm it once if stale.
     Returns None when no skills can be indexed — callers degrade, never raise."""
@@ -706,14 +762,18 @@ def _get_skill_search_index():
         if snap is None:
             build_skills_system_prompt()          # renders + persists a fresh snapshot v3
             snap = load_valid_skills_snapshot(skills_dir)
-        if not snap or not snap.get("skills"):
-            return None
-        key = (str(skills_dir), json.dumps(snap.get("manifest", {}), sort_keys=True))
+        key = (str(skills_dir), json.dumps((snap or {}).get("manifest", {}), sort_keys=True))
         with _SKILL_SEARCH_CACHE_LOCK:
             cached = _SKILL_SEARCH_INDEX_CACHE.get(key)
             if cached is not None:
                 return cached
-        index = SkillSearchIndex(build_skill_docs(snap["skills"]))
+        # Snapshot docs (primary dir) + live-scanned external/project docs; the extras
+        # scan runs only on cache misses (never-raise — failure keeps snapshot docs).
+        docs = build_skill_docs((snap or {}).get("skills") or [])
+        docs.extend(_extra_skill_docs(skills_dir, {d.name for d in docs}))
+        if not docs:
+            return None
+        index = SkillSearchIndex(docs)
         with _SKILL_SEARCH_CACHE_LOCK:
             _SKILL_SEARCH_INDEX_CACHE.clear()     # single-slot: skills dir changes are rare
             _SKILL_SEARCH_INDEX_CACHE[key] = index
