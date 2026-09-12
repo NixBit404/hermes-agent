@@ -1187,6 +1187,24 @@ class TestTwoTierRenderer:
         b = build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
         assert b != a                                                             # not served from stale LRU entry
 
+    def test_external_skill_with_usage_gets_full_entry(self, tmp_path, monkeypatch):
+        """SPEC §4.1: the full tier is dir-agnostic — external-dirs skills compete
+        for slots by usage/pin like local ones (they enter skills_by_category via
+        _collect_extra_skills, so selection input must be the final rendered set)."""
+        usage = {"ext-star": {"use_count": 99, "pinned": True, "last_used_at": None}}
+        root = self._setup(tmp_path, monkeypatch, usage=usage)                    # 9 local zero-use skills
+        ext = tmp_path / "external" / "tools" / "ext-star"; ext.mkdir(parents=True)
+        (ext / "SKILL.md").write_text(f"---\nname: ext-star\ndescription: {self.DESC}\n---\nbody\n")
+        from agent import prompt_builder as pb
+        from agent import skill_utils
+        monkeypatch.setattr(pb, "get_all_skills_dirs", lambda: [root, tmp_path / "external"], raising=True)
+        monkeypatch.setattr(skill_utils, "get_project_skills_dirs", lambda: [], raising=True)
+        result = pb.build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
+        # 10 names, floor budget keeps 7: pinned ext-star + the alphabetical filler
+        # head — the external skill takes a full slot AND demotion still happens.
+        assert "    - ext-star: " + self.DESC.strip()[:237] + "..." in result     # 240-char full tier
+        assert "[names only]: ab-f06, bb-plain, cc-plain" in result               # locals demoted around it
+
     def test_full_entries_none_is_legacy_bytes(self):
         """Ruling: ``full_entries=None`` renders EXACTLY the legacy single tier."""
         from agent.prompt_builder import _render_skills_index
@@ -1198,6 +1216,12 @@ class TestTwoTierRenderer:
         assert "[names only]" not in out
         assert "call skill_search(" not in out          # preamble needs two-tier mode, not just the tool
         assert out == _render_skills_index(cats, {}, None, {"skill_view", "skill_search"})
+        # Controller ruling (Task 10 review): legacy mode ALSO routes prefixed descs
+        # through _tier_cut — prefix intact, tail cut at 60. This pins the repair of
+        # the M1 deviation where the combined cut hid descriptions behind long prefixes.
+        prefixed = "[org-shared: by otto] " + self.DESC
+        out_p = _render_skills_index({"tools": [("org-s", prefixed)]}, {}, None, {"skill_view"})
+        assert f"    - org-s: [org-shared: by otto] {truncate_prompt_description(self.DESC)}" in out_p
 
     def test_prefix_survives_tier_cut(self):
         from agent.prompt_builder import _tier_cut
