@@ -23,10 +23,10 @@ from agent.model_metadata import CHARS_PER_TOKEN
 from agent.runtime_cwd import resolve_agent_cwd
 from agent.skill_utils import (
     EXCLUDED_SKILL_DIRS, SKILL_SUPPORT_DIRS,
-    TIER_LOCAL, clip_skill_description, extract_skill_conditions, extract_skill_description,
-    get_disabled_skill_names, get_skill_search_roots,
+    TIER_LOCAL, _normalize_skill_description, clip_skill_description, extract_skill_conditions, extract_skill_description,
+    extract_skill_search_fields, get_all_skills_dirs, get_disabled_skill_names, get_skill_search_roots,
     iter_skill_index_files, parse_frontmatter, skill_matches_apps, skill_matches_environment,
-    skill_matches_platform, skill_matches_platform_list,
+    skill_matches_platform, skill_matches_platform_list, truncate_prompt_description,
 )
 from tools.threat_patterns import scan_for_threats as _scan_for_threats
 from utils import atomic_json_write, file_cache_version
@@ -1077,8 +1077,9 @@ def drain_truncation_warnings() -> list:
 _SKILLS_PROMPT_CACHE_MAX = 32
 _SKILLS_PROMPT_CACHE: OrderedDict[tuple, str] = OrderedDict()
 _SKILLS_PROMPT_CACHE_LOCK = threading.Lock()
-# v2 added org provenance fields (org_id/org_author); v4 adds ``rel`` (SKILL.md path relative to its root) for
-# duplicate-name resolution; v5 stores descriptions clipped at a word boundary. Older snapshots are rebuilt.
+# v4 (upstream) added ``rel`` (SKILL.md path relative to its root) for duplicate-name resolution;
+# the v2-era org provenance fields were removed upstream. v5 (fork): full descriptions (render
+# truncates) + search_fields for skill_search — a superset of v4. Older snapshots are rebuilt.
 _SKILLS_SNAPSHOT_VERSION = 5
 
 
@@ -1148,6 +1149,7 @@ def _build_snapshot_entry(skill_file: Path, skills_dir: Path, frontmatter: dict,
         "conditions": extract_skill_conditions(frontmatter),
         "requires_apps": _requires_apps_list(frontmatter),
     }
+    entry["search_fields"] = extract_skill_search_fields(skill_file, frontmatter)
     return entry
 
 
@@ -1158,8 +1160,8 @@ def _parse_skill_file(skill_file: Path) -> tuple[bool, dict, str]:
         frontmatter, _ = parse_frontmatter(raw)
         # Host-platform / runtime-environment gates are offer-time only; explicit loads bypass them.
         if not skill_matches_platform(frontmatter) or not skill_matches_environment(frontmatter) or not skill_matches_apps(frontmatter):
-            return False, frontmatter, extract_skill_description(frontmatter)
-        return True, frontmatter, extract_skill_description(frontmatter)
+            return False, frontmatter, _normalize_skill_description(frontmatter)
+        return True, frontmatter, _normalize_skill_description(frontmatter)
     except Exception as e:
         logger.warning("Failed to parse skill file %s: %s", skill_file, e)
         return True, {}, ""
@@ -1328,7 +1330,8 @@ def _render_skills_index(
         indent = "  " if len(rows) == 1 else "    "
         if len(rows) > 1:
             index_lines.append(f"  {category}:")
-        index_lines.extend(f"{indent}- {name}: {desc}" if desc else f"{indent}- {name}" for name, desc in rows.items())
+        # Fork: the snapshot stores FULL descriptions, so truncate at render (upstream clips at parse time).
+        index_lines.extend(f"{indent}- {name}: {truncate_prompt_description(desc)}" if desc else f"{indent}- {name}" for name, desc in rows.items())
     from agent.oneshot_footprint import ONESHOT_SKILLS_LOAD_GUIDANCE, is_single_query_session
     if is_single_query_session():
         return (
