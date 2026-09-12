@@ -1181,3 +1181,21 @@ class TestSkillSearchTool:
         import json
         result = json.loads(raw, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(c)))
         assert result["results"][0]["name"] == "pdf-forms" and result["results"][0]["score"] == 1e9
+
+
+class TestSkillViewDidYouMean:
+    def test_typo_gets_ranked_suggestion(self, tmp_path, monkeypatch):
+        import json
+        from agent.prompt_builder import clear_skills_system_prompt_cache
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))   # align with SKILLS_DIR below
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+        d = tmp_path / "skills"; d.mkdir()
+        (d / "live-macbook-search").mkdir()
+        (d / "live-macbook-search" / "SKILL.md").write_text(
+            "---\nname: live-macbook-search\ndescription: Searches the live MacBook with Spotlight and mdfind.\n---\nbody\n")
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path / "skills"):
+            from tools.skills_tool import skill_view, _reset_skill_search_cache
+            _reset_skill_search_cache()
+            result = json.loads(skill_view("live-macbook-serach"))
+            assert result.get("success") is False
+            assert [s["name"] for s in result.get("did_you_mean", [])][:1] == ["live-macbook-search"]
