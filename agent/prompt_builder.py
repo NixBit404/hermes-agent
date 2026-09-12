@@ -5,6 +5,7 @@ with memory and ephemeral prompts.
 """
 
 import contextvars
+import hashlib
 import json
 import logging
 import os
@@ -1139,6 +1140,27 @@ def clear_skills_system_prompt_cache(*, clear_snapshot: bool = False) -> None:
             _skills_prompt_snapshot_path().unlink(missing_ok=True)
     except OSError as e:
         logger.debug("Could not remove skills prompt snapshot: %s", e)
+
+
+def _load_usage_summary() -> dict:
+    """Tiering-relevant slice of .usage.json; best-effort — missing/corrupt yields {}."""
+    try:
+        data = json.loads((get_hermes_home() / "skills" / ".usage.json").read_text("utf-8"))
+    except Exception:
+        return {}
+    out = {}
+    if isinstance(data, dict):
+        for name, rec in data.items():
+            if not isinstance(rec, dict):
+                continue
+            out[str(name)] = {"use_count": int(rec.get("use_count") or 0),
+                              "pinned": bool(rec.get("pinned")),
+                              "last_used_at": rec.get("last_used_at") or None}
+    return out
+
+
+def _usage_digest(usage: dict) -> str:
+    return hashlib.sha1(json.dumps(usage, sort_keys=True).encode()).hexdigest()[:12]
 
 
 def _build_skills_manifest(skills_dir: Path) -> dict[str, list[int]]:

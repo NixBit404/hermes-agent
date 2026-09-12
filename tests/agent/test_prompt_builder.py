@@ -1056,3 +1056,15 @@ class TestLoadValidSkillsSnapshot:
         build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
         snap = load_valid_skills_snapshot(skills)
         assert snap is not None and snap["version"] == 3 and snap["skills"][0]["frontmatter_name"] == "s1"
+
+
+class TestUsageSummary:
+    def test_load_usage_summary_best_effort(self, tmp_path, monkeypatch):
+        from agent.prompt_builder import _load_usage_summary, _usage_digest
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        assert _load_usage_summary() == {}                       # missing file
+        sk = tmp_path / "skills"; sk.mkdir()
+        (sk / ".usage.json").write_text('{"a": {"use_count": 3, "pinned": true, "last_used_at": "2026-09-01T00:00:00", "junk": 1}, "bad": 5}')
+        s = _load_usage_summary()
+        assert s == {"a": {"use_count": 3, "pinned": True, "last_used_at": "2026-09-01T00:00:00"}}
+        assert _usage_digest(s) == _usage_digest(dict(s))        # stable
