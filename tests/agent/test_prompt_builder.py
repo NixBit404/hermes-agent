@@ -1028,20 +1028,25 @@ class TestSnapshotV3SearchFields:
         assert entry["description"] == self.LONG_DESC.strip()          # full, uncut
         assert entry["search_fields"]["triggers"] == ["search the web"]
         assert "Setup" in entry["search_fields"]["body_headings"]
-        # Rendered prompt stays byte-compatible with the old 60-char behavior:
-        assert "demo-long: " + self.LONG_DESC.strip()[:57] + "..." in result
+        # Rendered prompt uses the two-tier 240-char full-tier cut (default budget
+        # keeps a lone entry in the full tier; renderer-level legacy byte-identity
+        # for full_entries=None is pinned in TestTwoTierRenderer):
+        assert "demo-long: " + self.LONG_DESC.strip()[:237] + "..." in result
 
-    def test_render_is_byte_identical_to_legacy_cut(self, tmp_path, monkeypatch):
+    def test_render_uses_two_tier_240_cut(self, tmp_path, monkeypatch):
         from agent.prompt_builder import build_skills_system_prompt, clear_skills_system_prompt_cache
         monkeypatch.setenv("HERMES_HOME", str(tmp_path))
         clear_skills_system_prompt_cache(clear_snapshot=True)
         skills = tmp_path / "skills"; skills.mkdir()
+        # Strictly increasing sequence so any [240:300] window is provably
+        # absent from the 237-char prefix (repeated filler would recur inside it).
+        long_desc = "".join(f"{i:03d}-" for i in range(100))
         self._mk_skill(tmp_path, "aa", "short desc")
-        self._mk_skill(tmp_path, "bb", self.LONG_DESC)
+        self._mk_skill(tmp_path, "bb", long_desc)
         result = build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
         assert "    - aa: short desc" in result
-        assert "    - bb: " + self.LONG_DESC.strip()[:57] + "..." in result
-        assert self.LONG_DESC.strip()[60:100] not in result            # nothing beyond the cut
+        assert "    - bb: " + long_desc[:237] + "..." in result
+        assert long_desc[240:300] not in result                       # nothing beyond the 240 cut
 
 
 class TestLoadValidSkillsSnapshot:
@@ -1114,3 +1119,91 @@ class TestSelectFullEntries:
         full = _select_full_entries(entries, usage={}, budget_chars=10 * 260)
         assert full == frozenset({"aa", "bb", "cc"})                     # filler: alphabetical at zero use
         assert _select_full_entries(entries, usage={}, budget_chars=1 * 260) == frozenset({"aa"})
+
+
+class TestTwoTierRenderer:
+    # Nine skills in ONE shared category so the per-category "[names only]" sub-line
+    # can comma-join demoted names. Budget arithmetic against the real config path:
+    # budget_tokens is clamped to a 500 floor, converted x4 to chars (2000); at 260
+    # chars estimated per full entry that keeps 7 of 9 (7*260=1820 <= 2000 < 2080),
+    # demoting exactly the two alphabetically-last zero-use fillers (cc-plain, bb-plain).
+    # The unique tail makes DESC[240:] provably absent from any 237-char prefix.
+    DESC = ("Live MacBook search via Spotlight and mdfind with follow-up routing. " * 3
+            + "macbook-mdfind-spotlight-followup-routing-sentinel-tail-0123456789")   # >240 chars
+    NAMES = ["aa-full", "ab-f01", "ab-f02", "ab-f03", "ab-f04", "ab-f05", "ab-f06",
+             "bb-plain", "cc-plain"]
+
+    def _setup(self, tmp_path, monkeypatch, usage=None, budget=500):
+        import json
+        from agent.prompt_builder import clear_skills_system_prompt_cache
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        clear_skills_system_prompt_cache(clear_snapshot=True)
+        root = tmp_path / "skills"; sk = root / "tools"; sk.mkdir(parents=True)
+        for name in self.NAMES:
+            (sk / name).mkdir()
+            (sk / name / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {self.DESC}\n---\nbody\n")
+        if usage is not None:
+            (root / ".usage.json").write_text(json.dumps(usage))
+        (tmp_path / "config.yaml").write_text(f"skills:\n  search:\n    budget_tokens: {budget}\n")
+        from agent import skill_utils
+        skill_utils._raw_config_cache_clear()
+        return root        # skills root: where .usage.json is read from
+
+    def test_full_tier_240_names_only_rest(self, tmp_path, monkeypatch):
+        usage = {"aa-full": {"use_count": 10, "pinned": True, "last_used_at": None}}
+        self._setup(tmp_path, monkeypatch, usage=usage)
+        from agent.prompt_builder import build_skills_system_prompt
+        result = build_skills_system_prompt(available_tools={"skill_view", "skill_search"}, available_toolsets={"skills"})
+        assert "    - aa-full: " + self.DESC.strip()[:237] + "..." in result      # 240-char tier
+        assert "[names only]: bb-plain, cc-plain" in result                       # demoted, comma-joined
+        assert "call skill_search(" in result                                     # preamble pointer
+        assert self.DESC.strip()[240:300] not in result                           # nothing past the 240 cut anywhere
+
+    def test_zero_usage_is_deterministic_and_capped(self, tmp_path, monkeypatch):
+        self._setup(tmp_path, monkeypatch, usage=None, budget=500)                # floor budget: 7 of 9 fit
+        from agent.prompt_builder import build_skills_system_prompt, _render_skills_index
+        r1 = build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
+        r2 = build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
+        assert r1 == r2                                                           # byte-stable
+        assert r1.count("[names only]:") >= 1                                     # degradation happened
+        assert "call skill_search(" not in r1                                     # pointer needs skill_search available
+
+    def test_names_only_never_drops_entries(self, tmp_path, monkeypatch):
+        usage = {"aa-full": {"use_count": 10, "pinned": True, "last_used_at": None}}
+        self._setup(tmp_path, monkeypatch, usage=usage, budget=500)
+        from agent.prompt_builder import build_skills_system_prompt
+        result = build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
+        for name in self.NAMES:
+            assert name in result                                                 # visible, one way or another
+
+    def test_usage_change_busts_lru(self, tmp_path, monkeypatch):
+        import json
+        usage = {"aa-full": {"use_count": 10, "pinned": True, "last_used_at": None}}
+        sk = self._setup(tmp_path, monkeypatch, usage=usage)
+        from agent.prompt_builder import build_skills_system_prompt
+        a = build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
+        assert "- aa-full: " in a
+        (sk / ".usage.json").write_text(json.dumps({"bb-plain": {"use_count": 50, "pinned": True, "last_used_at": None}}))
+        b = build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
+        assert b != a                                                             # not served from stale LRU entry
+
+    def test_full_entries_none_is_legacy_bytes(self):
+        """Ruling: ``full_entries=None`` renders EXACTLY the legacy single tier."""
+        from agent.prompt_builder import _render_skills_index
+        from agent.skill_utils import truncate_prompt_description
+        cats = {"tools": [("aa", self.DESC), ("bb", "short")]}
+        out = _render_skills_index(cats, {}, None, {"skill_view", "skill_search"})
+        assert f"    - aa: {truncate_prompt_description(self.DESC)}" in out       # 60-char cut
+        assert "    - bb: short" in out
+        assert "[names only]" not in out
+        assert "call skill_search(" not in out          # preamble needs two-tier mode, not just the tool
+        assert out == _render_skills_index(cats, {}, None, {"skill_view", "skill_search"})
+
+    def test_prefix_survives_tier_cut(self):
+        from agent.prompt_builder import _tier_cut
+        long_desc = "x" * 300
+        cut = _tier_cut("[org-shared: by otto] " + long_desc, 240)
+        assert cut.startswith("[org-shared: by otto] ")
+        assert cut.endswith("x" * (240 - 3) + "...")          # rest cut at the tier limit; prefix intact
+        assert _tier_cut("plain " + long_desc, 240) == "plain " + "x" * (240 - 3 - len("plain ")) + "..."
+        assert _tier_cut("[weird no-separator", 60) == "[weird no-separator"        # no "] " → plain cut path, uncut here
