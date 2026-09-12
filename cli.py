@@ -1359,6 +1359,20 @@ class HermesCLI(CLIInitMixin, CLITuiRuntimeMixin, CLIProcessNotificationsMixin, 
             lead, pointer = unknown_command_lines(cmd_lower, all_known)
             _cprint(f"\033[1;31m{lead}{_RST}")
             _cprint(f"{_DIM}{_ACCENT}{pointer}{_RST}")
+            # best-effort semantic skill suggestions (BM25F) beyond the helper's typo match
+            try:
+                from agent.skill_commands import get_skill_commands
+                from tools.skills_tool import _skill_search_suggestions
+                table = get_skill_commands() or {}
+                # Table keys already carry the leading slash ("/<slug>"); the suggestion side
+                # derives the same form (slugify maps "_" to "-", lower() is a no-op safety).
+                invocable = {c.lower() for c in table}
+                sug = [s["name"] for s in _skill_search_suggestions(cmd_lower, limit=2)
+                       if f"/{s['name'].lower().replace('_', '-')}" in invocable]
+                if sug:
+                    _cprint(f"{_DIM}Did you mean: {', '.join('/' + s for s in sug[:2])}{_RST}")
+            except Exception:
+                pass  # interactive error path — suggestions are best-effort only
         return True
 
     def _drain_interrupt_queue_to_pending_input(self) -> None:
