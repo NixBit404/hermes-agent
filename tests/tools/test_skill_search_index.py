@@ -55,6 +55,21 @@ class TestSkillSearchIndex:
         hits = self._index().search("pi52", limit=2)   # "pi52" stems to itself; lives in name/tags
         assert any(h["name"] == "live-pi-52-search" for h in hits)
 
+    def test_substring_fallback_fires_only_with_zero_token_hits(self):
+        """Ordering rule 3: the fixed-low-score (0.1) name-substring fallback fires
+        ONLY when NO query token matches any field. "c-de" tokenizes to c/de (both
+        stem to themselves) which appear in no doc field — but the raw string is a
+        substring of "abc-def", so the fallback returns exactly that doc at 0.1."""
+        entry = {"frontmatter_name": "abc-def", "category": "docs",
+                 "description": "Fill and flatten PDF forms with pypdf.",
+                 "search_fields": {"triggers": [], "tags": [], "related_skills": [], "body_headings": [], "body_head": ""}}
+        other = {"frontmatter_name": "zzz-qqq", "category": "docs",
+                 "description": "Unrelated widget tooling.",
+                 "search_fields": {"triggers": [], "tags": [], "related_skills": [], "body_headings": [], "body_head": ""}}
+        hits = self._index([entry, other]).search("c-de", limit=5)
+        assert [h["name"] for h in hits] == ["abc-def"]   # non-substring sibling absent
+        assert hits[0]["score"] == 0.1
+
     def test_result_description_capped_and_shape(self):
         hits = self._index().search("search the web", limit=1)
         assert set(hits[0]) == {"name", "category", "description", "score"}
