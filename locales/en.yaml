@@ -3415,6 +3415,7 @@ display:
     skill_view: "Reading skill"
     skills_list: "Listing skills"
     skill_manage: "Updating skill"
+    skill_search: "Searching skills"
     delegate_task: "Delegating"
     cronjob_manage: "Scheduling"
     clarify: "Asking"
@@ -3507,6 +3508,7 @@ display:
     images_extracting: "extracting"
     vision_analyzing_page: "analyzing page"
     skills_list: "list {category}"
+    skill_search: "search {query}"
     skills_all: "all"
     scroll:
       up: "up"
