@@ -29,7 +29,7 @@ from tools.skills_tool_plugin import (  # noqa: F401
 from tools.skills_tool_dedup import (  # noqa: F401
     _check_skill_view_dedup, _record_skill_view, reset_skill_view_dedup)
 from tools.skill_provenance import is_background_review
-from tools.skill_search_index import difflib_suggest
+from tools.skill_search_index import apply_usage_prior, difflib_suggest
 
 logger = logging.getLogger(__name__)
 
@@ -752,6 +752,14 @@ def skill_search(query: str, limit: int = SKILL_SEARCH_DEFAULT_LIMIT) -> str:
         if index is None:
             return tool_error("No skills available to search. Use skills_list once skills are installed.", success=False)
         hits = index.search(q, limit=limit)
+        # Usage-telemetry prior (pinned / recency / use_count) re-ranks the BM25F hits
+        # best-first; telemetry-excluded skills keep their BM25F score (prior zeroed).
+        # Lazy imports: skill_search stays cheap when uncalled, and test patches of
+        # tools.skill_usage.load_usage are honored at call time.
+        from agent.skill_utils import get_skills_search_settings
+        from tools.skill_usage import load_usage
+        hits = apply_usage_prior(hits, load_usage(),
+                                 excluded=get_skills_search_settings()["telemetry_excluded"])
         # Exact-name hits carry score=inf from the ranker — sanitize to a finite sentinel
         # before serialization (json.dumps would emit non-RFC "Infinity").
         hits = [{**h, "score": (1e9 if h["score"] == float("inf") else h["score"])} for h in hits]
