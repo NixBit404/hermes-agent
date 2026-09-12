@@ -507,6 +507,27 @@ def bump_use(skill_name: str, *, task_id: Optional[str] = None, session_id: Opti
     _mutate_and_emit(skill_name, "loaded", _apply, task_id=task_id, session_id=session_id)
 
 
+def log_skill_search(query: str, hits: List[Dict[str, Any]], latency_ms: float,
+                     error: Optional[str] = None) -> None:
+    """Append one skill_search invocation to ``skills/.search_log.jsonl`` — the query/score/latency
+    record the name-keyed usage sidecar can't hold. Seed data for the M4 replay eval; joined to
+    outcomes (skill_view picks) via session transcripts, not here. Best-effort: failures are
+    DEBUG-logged, never raised — the search tool must not fail because its telemetry did."""
+    with suppress(Exception):
+        entry: Dict[str, Any] = {
+            "ts": _now_iso(),
+            "query": str(query)[:200],
+            "latency_ms": round(float(latency_ms), 2),
+            "results": [{"name": h.get("name"), "score": h.get("score")} for h in (hits or [])[:10]],
+        }
+        if error:
+            entry["error"] = str(error)[:200]
+        path = _skills_dir() / ".search_log.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
 def bump_patch(skill_name: str, *, action: str = "patch", task_id: Optional[str] = None,
                session_id: Optional[str] = None) -> None:
     """Called from skill_manage (patch/edit)."""
