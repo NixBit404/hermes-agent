@@ -374,3 +374,17 @@ class TestSearchFieldExtraction:
         fields = extract_skill_search_fields(p, fm)
         assert fields["tags"] == ["web", "search"]
 
+
+class TestSkillsSearchSettings:
+    def test_defaults_and_clamping(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / "config.yaml").write_text("skills:\n  search:\n    budget_tokens: 999999\n    telemetry_excluded: [pi52-search-routing]\n")
+        from agent import skill_utils
+        skill_utils._raw_config_cache_clear()
+        s = skill_utils.get_skills_search_settings()
+        assert s["budget_tokens"] == 20000                       # clamped high
+        assert s["telemetry_excluded"] == frozenset({"pi52-search-routing"})
+        (tmp_path / "config.yaml").write_text("skills:\n")
+        skill_utils._raw_config_cache_clear()
+        assert skill_utils.get_skills_search_settings()["budget_tokens"] == 4000
+
