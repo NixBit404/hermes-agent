@@ -1153,9 +1153,12 @@ def _load_usage_summary() -> dict:
         for name, rec in data.items():
             if not isinstance(rec, dict):
                 continue
-            out[str(name)] = {"use_count": int(rec.get("use_count") or 0),
-                              "pinned": bool(rec.get("pinned")),
-                              "last_used_at": rec.get("last_used_at") or None}
+            try:
+                out[str(name)] = {"use_count": int(rec.get("use_count") or 0),
+                                  "pinned": bool(rec.get("pinned")),
+                                  "last_used_at": rec.get("last_used_at") or None}
+            except (TypeError, ValueError):
+                continue  # parseable JSON but wrong-typed fields — drop, never raise
     return out
 
 

@@ -388,3 +388,16 @@ class TestSkillsSearchSettings:
         skill_utils._raw_config_cache_clear()
         assert skill_utils.get_skills_search_settings()["budget_tokens"] == 4000
 
+    def test_telemetry_excluded_quoted_literal_and_scalar_forms(self, tmp_path, monkeypatch):
+        # `hermes config set` stores lists as quoted JSON/Python-literal strings
+        # (#13026/#86661): a raw iteration would character-split them and the
+        # exclusion would silently no-op.
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / "config.yaml").write_text("skills:\n  search:\n    telemetry_excluded: '[\"pi52-search-routing\"]'\n")
+        from agent import skill_utils
+        skill_utils._raw_config_cache_clear()
+        assert skill_utils.get_skills_search_settings()["telemetry_excluded"] == frozenset({"pi52-search-routing"})
+        (tmp_path / "config.yaml").write_text("skills:\n  search:\n    telemetry_excluded: pi52-search-routing\n")
+        skill_utils._raw_config_cache_clear()
+        assert skill_utils.get_skills_search_settings()["telemetry_excluded"] == frozenset({"pi52-search-routing"})
+

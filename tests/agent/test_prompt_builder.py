@@ -1068,3 +1068,14 @@ class TestUsageSummary:
         s = _load_usage_summary()
         assert s == {"a": {"use_count": 3, "pinned": True, "last_used_at": "2026-09-01T00:00:00"}}
         assert _usage_digest(s) == _usage_digest(dict(s))        # stable
+
+    def test_load_usage_summary_drops_wrong_typed_entries(self, tmp_path, monkeypatch):
+        # Parseable JSON but wrong-typed fields must never raise out of the
+        # best-effort reader: entries are dropped, well-formed ones survive.
+        from agent.prompt_builder import _load_usage_summary
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        sk = tmp_path / "skills"; sk.mkdir()
+        (sk / ".usage.json").write_text(
+            '{"x": {"use_count": "many"}, "z": {"use_count": [1]}, '
+            '"y": {"use_count": 2, "pinned": false, "last_used_at": null}}')
+        assert _load_usage_summary() == {"y": {"use_count": 2, "pinned": False, "last_used_at": None}}

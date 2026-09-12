@@ -321,7 +321,7 @@ def get_skills_search_settings() -> Dict[str, Any]:
     except (TypeError, ValueError):
         budget = DEFAULT_SKILLS_SEARCH_BUDGET_TOKENS
     budget = max(500, min(budget, 20000))
-    excluded = frozenset(str(x).strip() for x in (raw.get("telemetry_excluded") or []) if str(x).strip())
+    excluded = frozenset(_normalize_string_set(raw.get("telemetry_excluded")))
     return {"budget_tokens": budget, "telemetry_excluded": excluded}
 
 
