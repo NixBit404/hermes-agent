@@ -835,6 +835,7 @@ def resolve_skill_config_values(config_vars: list[dict[str, Any]]) -> dict[str, 
 
 
 SKILL_PROMPT_DESC_LIMIT = 60
+SKILL_PROMPT_FULL_DESC_LIMIT = 240   # two-tier catalog: full-tier description cut
 
 
 def _normalize_skill_description(frontmatter: dict[str, Any]) -> str:
