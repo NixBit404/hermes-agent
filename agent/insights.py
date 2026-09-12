@@ -15,7 +15,7 @@ from hermes_time import safe_strftime
 import itertools
 
 _TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
-_SKILL_TOOLS = {"skill_view", "skill_manage"}
+_SKILL_TOOLS = {"skill_view", "skill_manage", "skill_search"}
 
 
 def _fmt_est_cost(est_cost: float) -> str:
