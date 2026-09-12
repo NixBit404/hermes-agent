@@ -129,7 +129,11 @@ class SkillSearchIndex:
 
 
 def difflib_suggest(names: List[str], query: str, limit: int = 3) -> List[str]:
-    return difflib.get_close_matches(query.strip().lower(), [n.lower() for n in names], n=limit, cutoff=0.6)
+    """Closest names for a typo'd query, in ORIGINAL case: consumers match the
+    returned name case-sensitively (skill_view retry) and look descriptions up
+    by exact name, so lowercasing the matches here broke both."""
+    lowered = {n.lower(): n for n in names}
+    return [lowered[m] for m in difflib.get_close_matches(query.strip().lower(), list(lowered), n=limit, cutoff=0.6)]
 
 
 def _recent(iso: Optional[str], days: int = 14) -> float:
