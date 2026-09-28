@@ -43,8 +43,9 @@ scripts/run_tests.sh \
   tests/agent/test_display.py tests/agent/test_tool_guardrails.py \
   tests/agent/test_insights.py tests/agent/test_context_compressor.py
 
-echo "== compat pointers =="
-python3 scripts/check_compat_pointers.py
+# (compat-pointer step removed 2026-09-28: upstream retired the plugin-compat layer
+# on schedule — a5bd246865 "plugin compat layer removed on schedule (#126164)" deleted
+# scripts/check_compat_pointers.py and COMPAT_MANIFEST.md.)
 
 if [ "$NO_PUSH" = "1" ]; then
   echo "== done (push skipped) =="
