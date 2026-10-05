@@ -35,7 +35,7 @@ echo "== regression: fork-patch suites =="
 scripts/run_tests.sh \
   tests/agent/test_prompt_builder.py tests/agent/test_skill_utils.py \
   tests/agent/test_skill_commands.py tests/agent/test_external_skills.py \
-  tests/agent/test_project_skills.py tests/agent/test_org_skill_namespace.py \
+  tests/agent/test_project_skills.py \
   tests/agent/test_skill_session_platform_gate.py \
   tests/tools/test_skills_tool.py tests/tools/test_skill_search_index.py \
   tests/tools/test_skills_tool_discovery_cache.py tests/tools/test_skill_usage.py \
@@ -45,7 +45,9 @@ scripts/run_tests.sh \
 
 # (compat-pointer step removed 2026-09-28: upstream retired the plugin-compat layer
 # on schedule — a5bd246865 "plugin compat layer removed on schedule (#126164)" deleted
-# scripts/check_compat_pointers.py and COMPAT_MANIFEST.md.)
+# scripts/check_compat_pointers.py and COMPAT_MANIFEST.md.
+# test_org_skill_namespace.py removed from the list 2026-10-05 for the same reason:
+# upstream deleted the org-provenance machinery and its test in the 2026-09-29..10-05 window.)
 
 if [ "$NO_PUSH" = "1" ]; then
   echo "== done (push skipped) =="
