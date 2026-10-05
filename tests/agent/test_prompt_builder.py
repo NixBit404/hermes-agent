@@ -1066,7 +1066,7 @@ class TestSnapshotV3SearchFields:
         self._mk_skill(tmp_path, "demo-long", self.LONG_DESC, triggers="  - search the web\n")
         result = build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
         snap = json.loads(_skills_prompt_snapshot_path().read_text())
-        assert snap["version"] == 3
+        assert snap["version"] == 5  # upstream v4 (rel) + fork supersetschema (full desc + search_fields)
         entry = next(e for e in snap["skills"] if e["frontmatter_name"] == "demo-long")
         assert entry["description"] == self.LONG_DESC.strip()          # full, uncut
         assert entry["search_fields"]["triggers"] == ["search the web"]
@@ -1103,7 +1103,7 @@ class TestLoadValidSkillsSnapshot:
         assert load_valid_skills_snapshot(skills) is None            # no snapshot yet
         build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
         snap = load_valid_skills_snapshot(skills)
-        assert snap is not None and snap["version"] == 3 and snap["skills"][0]["frontmatter_name"] == "s1"
+        assert snap is not None and snap["version"] == 5 and snap["skills"][0]["frontmatter_name"] == "s1"
 
 
 class TestUsageSummary:
@@ -1240,7 +1240,7 @@ class TestTwoTierRenderer:
         (ext / "SKILL.md").write_text(f"---\nname: ext-star\ndescription: {self.DESC}\n---\nbody\n")
         from agent import prompt_builder as pb
         from agent import skill_utils
-        monkeypatch.setattr(pb, "get_all_skills_dirs", lambda: [root, tmp_path / "external"], raising=True)
+        monkeypatch.setattr(skill_utils, "get_external_skills_dirs", lambda: [tmp_path / "external"], raising=True)
         monkeypatch.setattr(skill_utils, "get_project_skills_dirs", lambda: [], raising=True)
         result = pb.build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
         # 10 names, floor budget keeps 7: pinned ext-star + the alphabetical filler
