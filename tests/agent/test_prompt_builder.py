@@ -1087,8 +1087,9 @@ class TestSnapshotV3SearchFields:
         self._mk_skill(tmp_path, "aa", "short desc")
         self._mk_skill(tmp_path, "bb", long_desc)
         result = build_skills_system_prompt(available_tools={"skill_view"}, available_toolsets={"skills"})
-        assert "    - aa: short desc" in result
-        assert "    - bb: " + long_desc[:237] + "..." in result
+        # Upstream (post rebase 2026-10-26) flattens single-skill categories: 2-space indent, no header.
+        assert "  - aa: short desc" in result
+        assert "  - bb: " + long_desc[:237] + "..." in result
         assert long_desc[240:300] not in result                       # nothing beyond the 240 cut
 
 
@@ -1264,7 +1265,8 @@ class TestTwoTierRenderer:
         # the M1 deviation where the combined cut hid descriptions behind long prefixes.
         prefixed = "[org-shared: by otto] " + self.DESC
         out_p = _render_skills_index({"tools": [("org-s", prefixed)]}, {}, None, {"skill_view"})
-        assert f"    - org-s: [org-shared: by otto] {truncate_prompt_description(self.DESC)}" in out_p
+        # Upstream flattens single-skill categories: 2-space indent, no "tools:" header.
+        assert f"  - org-s: [org-shared: by otto] {truncate_prompt_description(self.DESC)}" in out_p
 
     def test_prefix_survives_tier_cut(self):
         from agent.prompt_builder import _tier_cut
