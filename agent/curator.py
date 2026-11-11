@@ -1158,9 +1158,22 @@ def _run_llm_review(prompt: str) -> dict[str, Any]:
 
             _reset_background_review_read_marks()
         # Silence the fork's tool-call chatter (CLI synchronous foreground runs).
-        with open(os.devnull, "w", encoding="utf-8") as devnull, \
-             contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
-            conv_result = review_agent.run_conversation(user_message=prompt)
+        # Bind the "curator" ledger actor explicitly: this fork shares the
+        # background_review write-origin with the end-of-turn review, so without an
+        # explicit actor its writes would be filed as "review" and the ledger would
+        # under-claim that the daemon ran. The override is a ContextVar and the
+        # tool workers copy the caller's context (tools/daemon_pool.py), so the
+        # binding reaches every skill_manage call this fork makes.
+        # nixbit-patch: ledger-actor-review-2026-11-10
+        from tools.skill_ledger import reset_ledger_actor, set_ledger_actor
+        _actor_tok = set_ledger_actor("curator")
+        try:
+            with open(os.devnull, "w", encoding="utf-8") as devnull, \
+                 contextlib.redirect_stdout(devnull), contextlib.redirect_stderr(devnull):
+                conv_result = review_agent.run_conversation(user_message=prompt)
+        finally:
+            with contextlib.suppress(Exception):
+                reset_ledger_actor(_actor_tok)
         final = str(conv_result.get("final_response") or "").strip() if isinstance(conv_result, dict) else ""
         result_meta["final"] = final
         result_meta["summary"] = (final[:240] + "…") if len(final) > 240 else (final or "no change")

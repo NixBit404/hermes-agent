@@ -94,7 +94,9 @@ def test_background_review_patch_ledgers_and_rolls_back(ledger_env, monkeypatch)
     patch_rows = [r for r in rows if r["action"] == "patch"]
     assert len(patch_rows) == 1
     entry = patch_rows[0]
-    assert entry["actor"] == "curator"
+    # nixbit-patch: ledger-actor-review-2026-11-10
+    # The end-of-turn review is NOT the curator daemon: it lands as "review".
+    assert entry["actor"] == "review"
     assert any(i["path"].endswith("SKILL.md") for i in entry["before"])
 
     ok, msg = skill_ledger.rollback_entry(entry["id"])
@@ -122,6 +124,45 @@ def test_foreground_patch_is_ledgered_as_agent(ledger_env):
     rows = [r for r in skill_ledger.list_entries(skill="my-skill") if r["action"] == "patch"]
     assert len(rows) == 1
     assert rows[0]["actor"] == "agent"
+
+
+def test_curator_actor_override_beats_review_provenance(ledger_env):
+    """The curator daemon shares the background_review write-origin with the
+    end-of-turn review, but binds the explicit 'curator' actor around its run —
+    so its writes stay 'curator' while the review's land as 'review'.
+    # nixbit-patch: ledger-actor-review-2026-11-10
+    """
+    from tools import skill_ledger
+    from tools.skill_manager_guards import mark_background_review_skill_read
+    from tools.skill_manager_tool import skill_manage
+    from tools.skill_provenance import (
+        BACKGROUND_REVIEW,
+        reset_current_write_origin,
+        set_current_write_origin,
+    )
+
+    origin_token = set_current_write_origin(BACKGROUND_REVIEW)
+    actor_token = skill_ledger.set_ledger_actor("curator")
+    try:
+        assert _create()["success"] is True
+        skill_md = ledger_env["skills"] / "my-skill" / "SKILL.md"
+        mark_background_review_skill_read(skill_md)
+        patched = json.loads(
+            skill_manage(
+                action="patch",
+                name="my-skill",
+                old_string="Original body.",
+                new_string="Updated body.",
+            )
+        )
+    finally:
+        skill_ledger.reset_ledger_actor(actor_token)
+        reset_current_write_origin(origin_token)
+
+    assert patched["success"] is True
+    rows = [r for r in skill_ledger.list_entries(skill="my-skill") if r["action"] == "patch"]
+    assert len(rows) == 1
+    assert rows[0]["actor"] == "curator"
 
 
 def test_rollback_refuses_paths_outside_hermes_home(ledger_env):

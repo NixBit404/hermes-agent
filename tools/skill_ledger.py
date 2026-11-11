@@ -35,7 +35,12 @@ _ARCHIVE_TS_SUFFIX_RE = re.compile(r"^(.+)-\d{14}$")
 # Rollback of these must restore a COMPLETE package: consolidation may have re-homed
 # support files first, so a disk-only capture would restore a hollow skill.
 _PACKAGE_RESTORE_ACTIONS = frozenset({"delete", "archive", "purge"})
-_VALID_ACTORS = {"curator", "agent", "user"}
+# "curator" is reserved for the inactivity-triggered curator daemon, which binds that
+# actor explicitly around its own passes. "review" is the end-of-turn background
+# review (agent/background_review.py) — it shares the background_review write-origin
+# but has no daemon behind it, so it must not be filed under "curator".
+# nixbit-patch: ledger-actor-review-2026-11-10
+_VALID_ACTORS = {"curator", "agent", "user", "review"}
 _DEFAULT_LEDGER_MAX_BYTES = 5 * 1024 * 1024  # skills.ledger_max_bytes default (5 MB)
 _BLOB_GC_GRACE_SECS = 3600  # blobs younger than this may belong to an in-flight capture: never GC them
 _NON_PACKAGE_TOPS = {".curator_backups", ".hub", ".archive", ".locks"}
@@ -66,14 +71,26 @@ def reset_ledger_actor(token: contextvars.Token) -> None:
 
 
 def derive_actor() -> str:
-    """Explicit override, else background-review provenance -> curator, else agent."""
+    """Explicit override, else background-review provenance -> review, else agent.
+
+    The end-of-turn background review (agent/background_review.py) binds the
+    ``background_review`` write-origin, and so does the curator daemon's own LLM
+    pass (agent/curator.py). They are NOT the same writer: the daemon binds the
+    explicit ``"curator"`` actor around its run, so anything reaching here as
+    background-review provenance is the end-of-turn review -> "review".
+
+    Filing it under "curator" made the ledger claim a daemon pass happened when
+    only the review ran (and vice versa), which sent a 2026-11-11 audit chasing
+    a curator daemon that had been paused for two weeks.
+    # nixbit-patch: ledger-actor-review-2026-11-10
+    """
     override = _actor_override.get()
     if override in _VALID_ACTORS:
         return override
     with suppress(Exception):
         from tools.skill_provenance import is_background_review
         if is_background_review():
-            return "curator"
+            return "review"
     return "agent"
 
 
